@@ -1,6 +1,6 @@
 {
-	"database-id": "169b6e632b7448529120599281265ac5",
-	"author": "",
+	"database-id": "5252ca1894cf49c38a294b599f79a482",
+	"author": "YingweiGuo",
 	"public-ga-tracking-id": "",
 	"google-search-console-html-tag": "",
 	"socials": {
@@ -15,17 +15,17 @@
 		"instagram": "",
 		"mastodon": "",
 		"calendar": "",
-		"this-github-repo": "https://github.com/nerdymomocat-templates/webtrotion-astro-notion-cms-website-blog"
+		"this-github-repo": "https://github.com/guoyingwei6/webtrotion"
 	},
 	"custom-domain": "",
 	"base-path": "",
 	"giscus": {
-		"data-repo": "nerdymomocat-templates/webtrotion-astro-notion-cms-website-blog",
-		"data-repo-id": "R_kgDOK0FuUA",
+		"data-repo": "guoyingwei6/webtrotion",
+		"data-repo-id": "R_kgDOMoPooQ",
 		"data-category": "Announcements",
-		"data-category-id": "DIC_kwDOK0FuUM4CbZ5A",
+		"data-category-id": "DIC_kwDOMoPooc4Ch7Ed",
 		"data-mapping": "pathname",
-		"data-input-position": "top",
+		"data-input-position": "bottom",
 		"data-reactions-enabled": true
 	},
 	"references": {
