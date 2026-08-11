@@ -21,7 +21,7 @@ interface Props {
 	withDesc?: boolean;
 }
 
-const { post, as: Tag = "h3", withDesc = true } = Astro.props;
+const { post, as: Tag = "h3", withDesc = true } = Astro.props as Props;
 const postLink = resolvePostHref(post);
 const external = isExternalPost(post);
 
@@ -82,7 +82,7 @@ const hasAuthors = post.Authors !== undefined && post.Authors.length > 0;
 						decoding="async"
 						widths={[400, 600]}
 						sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-						quality={OPTIMIZE_IMAGES ? 80 : undefined}
+						{...(OPTIMIZE_IMAGES ? { quality: 80 } : {})}
 					/>
 				) : featuredImageUrl ? (
 					<img
@@ -102,7 +102,7 @@ const hasAuthors = post.Authors !== undefined && post.Authors.length > 0;
 			{/* External badge */}
 			{
 				external && (
-					<div class="bg-quote/90 absolute top-2 right-2 flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold text-white">
+					<div class="post-card-badge">
 						<Icon name={"external-link"} class="h-3 w-3" aria-hidden="true" />
 						Ext
 					</div>
@@ -127,22 +127,15 @@ const hasAuthors = post.Authors !== undefined && post.Authors.length > 0;
 		{/* Card Content */}
 		<div class="pt-2 pb-1">
 			{/* Date */}
-			<FormattedDate
-				date={new Date(post.Date)}
-				class="text-accent/80 mb-1 block font-mono text-[10px]"
-			/>
+			<FormattedDate date={post.Date} class="post-card-meta-date" />
 
 			{/* Title */}
-			<Tag class="mb-1 text-sm leading-snug font-semibold">
+			<Tag class="post-card-title">
 				<span class="line-clamp-2">{post.Title}</span>
 			</Tag>
 
 			{/* Excerpt - shorter for cards */}
-			{
-				withDesc && post.Excerpt && (
-					<p class="text-textColor/70 line-clamp-2 block text-xs italic">{post.Excerpt}</p>
-				)
-			}
+			{withDesc && post.Excerpt && <p class="post-card-excerpt">{post.Excerpt}</p>}
 		</div>
 	</a>
 
@@ -153,7 +146,7 @@ const hasAuthors = post.Authors !== undefined && post.Authors.length > 0;
 				{post.Authors!.map((author, i) => (
 					<>
 						<a
-							class="text-textColor/60 hover:text-accent text-[10px] transition-colors"
+							class="post-card-author-link"
 							aria-label={`View posts by ${author.name}`}
 							href={getNavLink("/authors/" + slugify(author.name) + "/")}
 						>
@@ -170,10 +163,10 @@ const hasAuthors = post.Authors !== undefined && post.Authors.length > 0;
 	{
 		post.Tags && post.Tags.length > 0 && (
 			<div class="post-card-tags">
-				{post.Tags.slice(0, 3).map((tag, i) => (
+				{post.Tags.slice(0, 3).map((tag) => (
 					<>
 						<a
-							class={`inline-block rounded-md px-1 text-xs ${getNotionColorToTailwindColor(
+							class={`notion-tag text-xs ${getNotionColorToTailwindColor(
 								tag.color + "-background",
 								true,
 							)}`}

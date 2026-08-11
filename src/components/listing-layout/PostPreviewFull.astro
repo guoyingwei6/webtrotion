@@ -1,8 +1,6 @@
 ---
-import type { HTMLTag } from "astro/types";
 import FormattedDate from "@/components/ui/FormattedDate.astro";
 import AuthorByline from "@/components/layout/AuthorByline.astro";
-import type { Post } from "@/lib/interfaces";
 import { getPostContentByPostId } from "@/lib/notion/client";
 import {
 	getNavLink,
@@ -14,26 +12,14 @@ import {
 } from "@/lib/blog-helpers";
 import NotionBlocks from "@/components/NotionBlocks.astro";
 import { getNotionColorToTailwindColor } from "@/utils/style-helpers";
-import {
-	MENU_PAGES_COLLECTION,
-	BUILD_FOLDER_PATHS,
-	COVER_AS_HERO_BACKGROUND_ENABLED,
-} from "@/constants";
+import { BUILD_FOLDER_PATHS, COVER_AS_HERO_BACKGROUND_ENABLED } from "@/constants";
 import Icon from "@/components/ui/Icon.astro";
 import { buildHeadings, slugify } from "@/utils";
 import fs from "fs/promises";
-import path from "path";
+import path from "node:path";
 import superjson from "superjson";
 import { getImage } from "astro:assets";
 import HeroBackgroundCover from "@/components/layout/HeroBackgroundCover.astro";
-
-interface Props {
-	post_full_preview: Post;
-	shouldUseCache: boolean;
-	postLastUpdatedBeforeLastBuild: boolean;
-	as?: HTMLTag;
-	withDesc?: boolean;
-}
 
 const {
 	post_full_preview,
@@ -45,16 +31,10 @@ const {
 const external = isExternalPost(post_full_preview);
 
 let blocks = null;
-let interlinkedContentInPage = null;
-let footnotesInPage = null;
-let citationsInPage = null;
 
 if (!external) {
 	const result = await getPostContentByPostId(post_full_preview);
 	blocks = result.blocks;
-	interlinkedContentInPage = result.interlinkedContentInPage;
-	footnotesInPage = result.footnotesInPage;
-	citationsInPage = result.citationsInPage;
 }
 
 // --- Headings Cache Handling ---
@@ -155,21 +135,12 @@ if (showHeroBackground && post_full_preview.Cover?.Url) {
 	placeholderUrl={coverPlaceholderUrl}
 	class="mb-4"
 >
-	<FormattedDate
-		date={new Date(post_full_preview.Date)}
-		class="text-accent/90 min-w-[120px] font-mono text-xs"
-	/>
+	<FormattedDate date={post_full_preview.Date} class="post-card-date" />
 
 	<Tag class="font-bold">
 		{
 			external && (
-				<a
-					href={postLink}
-					class="border-quote/60 text-quote hover:border-quote/80 hover:text-quote mr-2 inline-flex items-center gap-1 rounded border px-2 py-[2px] text-[11px] font-semibold tracking-wider uppercase transition"
-					target="_blank"
-					rel="nofollow noopener"
-					aria-label="Visit external site"
-				>
+				<a href={postLink} target="_blank" rel="nofollow noopener" aria-label="Visit external site">
 					<Icon name={"external-link"} class="h-3.5 w-3.5" aria-hidden="true" />
 					Ext
 				</a>
@@ -211,13 +182,10 @@ if (showHeroBackground && post_full_preview.Cover?.Url) {
 					aria-hidden="true"
 					focusable="false"
 				/>
-				{post_full_preview.Tags.map((tag, i) => (
+				{post_full_preview.Tags.map((tag: { name: string; color?: string }) => (
 					<>
 						<a
-							class={`inline-block rounded-md px-1 text-sm ${getNotionColorToTailwindColor(
-								tag.color + "-background",
-								true,
-							)}`}
+							class={`notion-tag ${getNotionColorToTailwindColor(tag.color + "-background", true)}`}
 							aria-label={`View more blogs with the tag ${tag.name}`}
 							href={getNavLink("/tags/" + slugify(tag.name) + "/")}
 						>
@@ -244,7 +212,7 @@ if (showHeroBackground && post_full_preview.Cover?.Url) {
 			{shouldUseCache && cachedHtml ? (
 				<div set:html={cachedHtml} />
 			) : (
-				<NotionBlocks blocks={blocks} />
+				blocks && <NotionBlocks blocks={blocks} />
 			)}
 		</section>
 	)

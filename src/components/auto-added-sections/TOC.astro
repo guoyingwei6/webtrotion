@@ -27,17 +27,23 @@ const toc = generateToc(headings);
 
 <button id="show-bottom-toc" class="bottom-toc-button" aria-label="Toggle table of contents">
 	<Icon
-		class="bottom-toc-icon h-6 w-6 transition-opacity duration-300"
+		class="bottom-toc-icon h-6 w-6 transition-opacity duration-200"
 		name="table-of-contents"
 		aria-hidden="true"
 	/>
 	<Icon
-		class="close-bottom-toc-icon absolute h-6 w-6 opacity-0 transition-opacity duration-300"
+		class="close-bottom-toc-icon absolute h-6 w-6 opacity-0 transition-opacity duration-200"
 		name="close"
 		aria-hidden="true"
 	/>
 </button>
 <script>
+	declare global {
+		interface Window {
+			__ensureNotionTabTargetVisible?: (targetId: string) => Element | null;
+		}
+	}
+
 	document.addEventListener("DOMContentLoaded", () => {
 		const tocContainer = document.querySelector(".toc-container");
 		const tocContent = document.querySelector(".toc-content");
@@ -46,14 +52,14 @@ const toc = generateToc(headings);
 		const bottomTocOpen = document.querySelector(".bottom-toc-icon");
 		const bottomTocClose = document.querySelector(".close-bottom-toc-icon");
 
-		function debounce(func, wait) {
-			let timeout;
-			return function executedFunction(...args) {
+		function debounce<T extends (...args: any[]) => void>(func: T, wait: number) {
+			let timeout: ReturnType<typeof setTimeout> | undefined;
+			return function executedFunction(...args: Parameters<T>) {
 				const later = () => {
-					clearTimeout(timeout);
+					if (timeout) clearTimeout(timeout);
 					func(...args);
 				};
-				clearTimeout(timeout);
+				if (timeout) clearTimeout(timeout);
 				timeout = setTimeout(later, wait);
 			};
 		}
@@ -66,7 +72,7 @@ const toc = generateToc(headings);
 			bottomTocOpen &&
 			bottomTocClose
 		) {
-			const toggleBottomToc = (event) => {
+			const toggleBottomToc = (event: MouseEvent) => {
 				event.stopPropagation();
 				const isVisible = tocContent.classList.toggle("invisible");
 				tocContent.classList.toggle("opacity-0", isVisible);
@@ -113,11 +119,11 @@ const toc = generateToc(headings);
 			});
 		}
 
-		const headings = document.querySelectorAll("h2[id], h3[id], h4[id]");
+		const headings = document.querySelectorAll("h2[id], h3[id], h4[id], h5[id]");
 		const visuals = document.querySelectorAll('[id^="-vistocid--"]');
 		const tocLinks = document.querySelectorAll('[id^="-tocid--"]');
 
-		const highlightTocItem = (tocLink, tocVisual) => {
+		const highlightTocItem = (tocLink: Element | null, tocVisual: Element | null) => {
 			tocLinks.forEach((l) => l.classList.remove("text-quote!"));
 			visuals.forEach((v) => {
 				v.classList.remove("bg-accent");
@@ -133,7 +139,7 @@ const toc = generateToc(headings);
 			}
 		};
 
-		const scrollTocToLink = (tocLink) => {
+		const scrollTocToLink = (tocLink: Element | null) => {
 			if (tocLink instanceof HTMLElement && tocContent instanceof HTMLElement) {
 				const tocRect = tocContent.getBoundingClientRect();
 				const linkRect = tocLink.getBoundingClientRect();
@@ -149,7 +155,7 @@ const toc = generateToc(headings);
 
 		let isManualScrolling = false;
 
-		const observerCallback = (entries) => {
+		const observerCallback: IntersectionObserverCallback = (entries) => {
 			entries.forEach((entry) => {
 				if (entry.isIntersecting && !isManualScrolling) {
 					const id = entry.target.getAttribute("id");
@@ -175,7 +181,8 @@ const toc = generateToc(headings);
 				const href = link.getAttribute("href");
 				if (!href) return;
 				const targetId = href.substring(1);
-				const targetHeading = document.getElementById(targetId);
+				const targetHeading =
+					window.__ensureNotionTabTargetVisible?.(targetId) || document.getElementById(targetId);
 
 				if (targetHeading) {
 					isManualScrolling = true;

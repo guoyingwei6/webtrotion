@@ -1,191 +1,319 @@
 ---
-// Heavy inspiration taken from Astro Starlight -> https://github.com/withastro/starlight/blob/main/packages/starlight/components/Search.astro
-
 import Icon from "@/components/ui/Icon.astro";
+import noSearchMatchesImage from "@/assets/no-search-matches-cat-in-bag.svg";
+import { getAllPosts } from "@/lib/notion/client";
+import { resolvePostHref, getNotionImage } from "@/lib/blog-helpers";
+import { getImage, Image } from "astro:assets";
+
+const baseUrl = import.meta.env.BASE_URL;
+const pagefindBundlePath = `${baseUrl.replace(/\/$/, "")}/pagefind/`;
+const gotoIndexUrl = `${baseUrl.replace(/\/$/, "")}/search-pages.json`;
+const searchPlaceholder = "Tip: Press ⌘K or ^K to open search, or / to go to a page";
+const compactSearchPlaceholder = "Search, or / to go to a page";
+const pinnedPost = (await getAllPosts()).find((post) => post.Pinned && !post.Slug.startsWith("_"));
+const pinnedIcon = pinnedPost?.Icon;
+const pinnedIconEmoji = pinnedIcon && "Emoji" in pinnedIcon ? pinnedIcon.Emoji : "";
+const pinnedIconUrl = pinnedIcon && "Url" in pinnedIcon ? pinnedIcon.Url : "";
+// Raw raster imports are not emitted to dist.
+let pinnedIconImage = "";
+
+try {
+	const pinnedIconDownloaded = pinnedIconUrl ? await getNotionImage(new URL(pinnedIconUrl)) : null;
+	if (pinnedIconDownloaded) {
+		pinnedIconImage = (await getImage({ src: pinnedIconDownloaded, width: 48 })).src;
+	}
+} catch {}
 ---
 
-<site-search id="search" class="ms-auto">
-	<button data-open-modal disabled class="search-btn" aria-label="Open search">
-		<Icon class="h-7 w-7" name={"search"} />
-	</button>
-	<dialog aria-label="search" class="search-dialog">
-		<div class="search-frame">
-			<button data-close-modal class="search-close-btn" aria-label="Close Search"
-				><Icon class="inline h-6 w-6" name={"close"} aria-hidden="true" focusable="false" /></button
-			>
-			{
-				import.meta.env.DEV ? (
-					<div class="mx-auto text-center">
-						<p>
-							Search is only available in production builds. <br />
-							Try building and previewing the site to test it out locally.
-						</p>
+<site-search
+	id="search"
+	class="ms-auto"
+	data-search-placeholder={searchPlaceholder}
+	data-compact-search-placeholder={compactSearchPlaceholder}
+>
+	{
+		import.meta.env.DEV ? (
+			<button type="button" disabled class="search-btn" aria-label="Search unavailable in dev">
+				<span aria-hidden="true">⌕</span>
+			</button>
+		) : (
+			<>
+				<pagefind-config
+					instance="webtrotion-search"
+					bundle-path={pagefindBundlePath}
+					base-url={baseUrl}
+					excerpt-length="60"
+					highlight-param="highlight"
+					faceted
+				/>
+				<button type="button" disabled class="search-btn" aria-label="Open search">
+					<Icon class="h-7 w-7" name="search" />
+				</button>
+				<dialog class="search-loading-modal" aria-label="Search" aria-busy="true">
+					<div class="search-loading-header">
+						<div class="search-loading-input" aria-hidden="true">
+							<Icon class="search-loading-input-icon" name="search" />
+							<span class="search-loading-input-text">{searchPlaceholder}</span>
+						</div>
 					</div>
-				) : (
-					<div class="search-container">
-						<div id="webtrotion__search" />
+					<div class="search-loading-body">
+						<span class="search-loading-spinner" role="status" aria-label="Loading search" />
 					</div>
-				)
-			}
-		</div>
-	</dialog>
+				</dialog>
+				<pagefind-modal id="webtrotion-search-modal" instance="webtrotion-search">
+					<pagefind-modal-header>
+						<pagefind-input
+							instance="webtrotion-search"
+							placeholder={searchPlaceholder}
+							debounce="150"
+						/>
+					</pagefind-modal-header>
+					<pagefind-modal-body>
+						<div class="webtrotion-search-shell">
+							<div class="webtrotion-search-filters" aria-label="Search filters">
+								<span class="webtrotion-search-filters-icon" aria-hidden="true">
+									<Icon name="filter-variant" aria-hidden="true" focusable="false" />
+								</span>
+								<pagefind-filter-dropdown
+									instance="webtrotion-search"
+									filter="collections"
+									label="Collections"
+									sort="count-desc"
+									hide-clear
+								/>
+								<pagefind-filter-dropdown
+									instance="webtrotion-search"
+									filter="tags"
+									label="Tags"
+									sort="count-desc"
+									hide-clear
+								/>
+							</div>
+							<div class="webtrotion-search-content">
+								<section class="webtrotion-search-results-pane" aria-label="Search results">
+									<webtrotion-search-navigation
+										aria-label="Navigate site pages"
+										data-goto-index-url={gotoIndexUrl}
+										data-pinned-title={pinnedPost?.Title}
+										data-pinned-url={pinnedPost ? resolvePostHref(pinnedPost) : undefined}
+										data-pinned-collection={pinnedPost?.Collection}
+										data-pinned-excerpt={pinnedPost?.Excerpt}
+										data-pinned-icon-emoji={pinnedIconEmoji || undefined}
+										data-pinned-icon-image={pinnedIconImage || undefined}
+									/>
+									<p
+										class="pagefind-summary pf-summary webtrotion-search-summary"
+										aria-live="polite"
+									>
+										<span class="webtrotion-search-summary-count" />{" "}
+										<span class="webtrotion-search-summary-label" />
+									</p>
+									<webtrotion-search-results instance="webtrotion-search" max-sub-results="3" />
+									<div class="webtrotion-search-empty-state" hidden aria-live="polite">
+										<Image
+											class="webtrotion-search-empty-state-image"
+											loading="lazy"
+											src={noSearchMatchesImage}
+											alt=""
+										/>
+										<div class="webtrotion-search-empty-state-copy">
+											<p class="webtrotion-search-empty-state-title">No results found</p>
+											<p>Try a different term or clear a filter to see more.</p>
+										</div>
+									</div>
+								</section>
+								<div class="webtrotion-search-preview-slot">
+									<button
+										type="button"
+										class="webtrotion-search-preview-handle"
+										aria-expanded="true"
+										aria-controls="webtrotion-search-preview-panel"
+										tabindex="-1"
+									>
+										<span class="webtrotion-search-preview-handle-label">Preview</span>
+										<Icon
+											class="webtrotion-search-preview-handle-chevron"
+											name="chevron-down"
+											aria-hidden="true"
+											focusable="false"
+										/>
+									</button>
+									<webtrotion-search-preview
+										id="webtrotion-search-preview-panel"
+										instance="webtrotion-search"
+									/>
+								</div>
+							</div>
+						</div>
+					</pagefind-modal-body>
+					<pagefind-modal-footer>
+						<div class="webtrotion-search-navigation-hints" aria-label="Keyboard shortcuts">
+							<span>
+								<>
+									<kbd class="webtrotion-search-arrow-key">▲</kbd>
+									<kbd class="webtrotion-search-arrow-key">▼</kbd>
+								</>{" "}
+								Navigate
+							</span>
+							<span>
+								<kbd class="webtrotion-search-arrow-key">▶</kbd> Matches
+							</span>
+							<span>
+								<kbd class="webtrotion-search-symbol-key">⏎</kbd> Open
+							</span>
+							<span>
+								<kbd class="webtrotion-search-platform-modifier">⌘</kbd>
+								<kbd class="webtrotion-search-symbol-key">/</kbd> Search
+							</span>
+							<span>
+								<>
+									<kbd class="webtrotion-search-platform-modifier">⌘</kbd>
+									<kbd class="webtrotion-search-symbol-key">⌫</kbd>
+								</>{" "}
+								Clear
+							</span>
+							<span>
+								<kbd class="webtrotion-search-symbol-key">Esc</kbd> Close
+							</span>
+						</div>
+					</pagefind-modal-footer>
+				</pagefind-modal>
+			</>
+		)
+	}
 </site-search>
 
 <script>
 	class SiteSearch extends HTMLElement {
-		private openBtn: HTMLButtonElement;
-		private closeBtn: HTMLButtonElement;
-		private dialog: HTMLDialogElement;
-		private dialogFrame: HTMLDivElement;
-		private observer: MutationObserver;
-		private initialized: boolean = false;
-		private idleCallbackId: number | null = null;
-		private pagefindUI: any = null;
-		private _loadPagefind: (() => Promise<void>) | null = null;
-
-		constructor() {
-			super();
-			this.openBtn = this.querySelector<HTMLButtonElement>("button[data-open-modal]")!;
-			this.closeBtn = this.querySelector<HTMLButtonElement>("button[data-close-modal]")!;
-			this.dialog = this.querySelector("dialog")!;
-			this.dialogFrame = this.querySelector(".search-frame")!;
-
-			this.openBtn.addEventListener("click", this.openModal);
-			this.openBtn.disabled = false;
-			this.closeBtn.addEventListener("click", this.closeModal);
-
-			// Initialize MutationObserver
-			this.observer = new MutationObserver(this.queueDOMCheck);
-		}
+		private runtimePromise: Promise<import("./search-runtime").SearchRuntime> | null = null;
+		private runtime: import("./search-runtime").SearchRuntime | null = null;
+		private openBtn: HTMLButtonElement | null = null;
+		private loadingModal: HTMLDialogElement | null = null;
+		private pendingOpen = false;
 
 		connectedCallback() {
-			window.addEventListener("keydown", this.onWindowKeydown);
 			if (import.meta.env.DEV) return;
 
-			this._loadPagefind = async () => {
-				if (this.pagefindUI) return;
-				const { PagefindUI } = await import("@pagefind/default-ui");
-				const bundlePath = import.meta.env.BASE_URL.replace(/\/$/, "") + "/pagefind/";
-				const css = document.createElement("link");
-				css.rel = "stylesheet";
-				css.href = bundlePath + "pagefind-ui.css";
-				document.head.appendChild(css);
-
-				this.pagefindUI = new PagefindUI({
-					element: "#webtrotion__search",
-					baseUrl: import.meta.env.BASE_URL,
-					bundlePath: import.meta.env.BASE_URL.replace(/\/$/, "") + "/pagefind/",
-					showImages: false,
-					showSubResults: true,
-					showEmptyFilters: false,
-					openFilters: ["Tags"],
-					translations: {
-						placeholder: "Tip: Use ⌘K or ^K to open search",
-						zero_results: "Couldn't find [SEARCH_TERM]",
-					},
-				});
-
-				if (this.dialog.open) {
-					requestAnimationFrame(() => this.querySelector("input")?.focus());
-				}
-
-				// Start observing the dialog for changes
-				this.observer.observe(this.dialog, { childList: true, subtree: true });
-
-				const queryParams = new URLSearchParams(window.location.search);
-				const searchTerm = queryParams.get("q");
-
-				if (searchTerm) {
-					this.openModal();
-					this.pagefindUI.triggerSearch(searchTerm);
-				}
-			};
-
-			const queryParams = new URLSearchParams(window.location.search);
-			if (queryParams.get("q")) {
-				this._loadPagefind();
-			} else {
-				// Load on interaction
-				this.openBtn.addEventListener("mouseenter", () => this._loadPagefind?.(), { once: true });
-				this.openBtn.addEventListener("focus", () => this._loadPagefind?.(), { once: true });
+			const isApplePlatform = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
+			for (const modifier of this.querySelectorAll<HTMLElement>(
+				".webtrotion-search-platform-modifier",
+			)) {
+				modifier.textContent = isApplePlatform ? "⌘" : "Ctrl";
+				modifier.setAttribute("aria-label", isApplePlatform ? "Command" : "Control");
 			}
+
+			this.openBtn = this.querySelector<HTMLButtonElement>(".search-btn");
+			this.loadingModal = this.querySelector<HTMLDialogElement>(".search-loading-modal");
+			this.loadingModal?.addEventListener("close", this.onLoadingClose);
+			if (this.openBtn) {
+				this.openBtn.disabled = false;
+				this.openBtn.addEventListener("pointerenter", this.prefetch);
+				this.openBtn.addEventListener("focus", this.prefetch);
+				this.openBtn.addEventListener("click", this.onClick);
+			}
+			document.addEventListener("keydown", this.onKeydown);
+
+			const params = new URLSearchParams(window.location.search);
+			const hasDeepLink =
+				params.has("q") ||
+				params.has("collections") ||
+				params.has("collection") ||
+				params.has("tags") ||
+				params.has("tag");
+			if (hasDeepLink) this.openSearch(true);
 		}
 
 		disconnectedCallback() {
-			window.removeEventListener("keydown", this.onWindowKeydown);
-			this.observer.disconnect();
-			if (this.idleCallbackId !== null) {
-				(window.cancelIdleCallback || clearTimeout)(this.idleCallbackId);
-			}
+			document.removeEventListener("keydown", this.onKeydown);
 		}
 
-		queueDOMCheck = () => {
-			if (this.initialized) return;
+		private prefetch = () => {
+			void this.load();
+		};
 
-			if (this.idleCallbackId !== null) {
-				(window.cancelIdleCallback || clearTimeout)(this.idleCallbackId);
+		private onClick = (event: Event) => {
+			event.preventDefault();
+			this.openSearch(false);
+		};
+
+		private onKeydown = (event: KeyboardEvent) => {
+			if (event.defaultPrevented) return;
+
+			const key = event.key.toLowerCase();
+			const isShortcutK = (event.metaKey || event.ctrlKey) && !event.altKey && key === "k";
+			if (!isShortcutK) return;
+
+			event.preventDefault();
+			this.openSearch(false);
+		};
+
+		private onLoadingClose = () => {
+			this.pendingOpen = false;
+		};
+
+		private openSearch(fromUrl: boolean) {
+			this.updateSearchPlaceholder();
+			if (this.runtime) {
+				if (fromUrl) this.runtime.openFromUrl();
+				else this.runtime.open();
+				return;
 			}
 
-			const onIdle = window.requestIdleCallback || ((cb) => setTimeout(cb, 0));
-			this.idleCallbackId = onIdle(this.checkForFilterBlocks);
-		};
+			// Show a loader only for a cold runtime import.
+			this.pendingOpen = true;
+			const placeholderTimer = window.setTimeout(() => {
+				if (this.pendingOpen && this.loadingModal && !this.loadingModal.open) {
+					try {
+						this.loadingModal.showModal();
+					} catch {}
+				}
+			}, 120);
 
-		checkForFilterBlocks = () => {
-			this.idleCallbackId = null;
-			if (this.initialized) return;
+			void this.load().then((runtime) => {
+				window.clearTimeout(placeholderTimer);
+				if (!this.pendingOpen) return; // dismissed before it was ready
+				this.pendingOpen = false;
+				const handoff = this.loadingModal?.open ?? false;
+				if (handoff) {
+					// Keep the placeholder-to-modal hand-off seamless.
+					this.dataset.searchHandoff = "";
+					this.loadingModal?.close();
+				}
+				if (fromUrl) runtime.openFromUrl();
+				else runtime.open();
+				if (handoff) {
+					requestAnimationFrame(() =>
+						requestAnimationFrame(() => delete this.dataset.searchHandoff),
+					);
+				}
+			});
+		}
 
-			const filterBlocks = this.dialog.querySelectorAll(".pagefind-ui__filter-block");
-			if (filterBlocks.length >= 2) {
-				this.initializeFilterBlocks(filterBlocks);
-				this.initialized = true;
-				this.observer.disconnect();
+		private updateSearchPlaceholder() {
+			const placeholder = window.matchMedia("(max-width: 640px)").matches
+				? this.dataset.compactSearchPlaceholder
+				: this.dataset.searchPlaceholder;
+			if (!placeholder) return;
+			this.querySelector("pagefind-input")?.setAttribute("placeholder", placeholder);
+			const loadingText = this.querySelector<HTMLElement>(".search-loading-input-text");
+			if (loadingText) loadingText.textContent = placeholder;
+		}
+
+		private load() {
+			if (!this.runtimePromise) {
+				this.runtimePromise = import("./search-runtime").then(async (module) => {
+					const runtime = module.createSearchRuntime(this);
+					// Avoid a flash of unstyled search UI.
+					await module.stylesReady;
+					this.runtime = runtime;
+					return runtime;
+				});
 			}
-		};
-
-		initializeFilterBlocks = (filterBlocks: NodeListOf<Element>) => {
-			const secondFilterBlock = filterBlocks[1] as HTMLDetailsElement;
-			if (window.innerWidth >= 640) {
-				// Tailwind's sm breakpoint
-				secondFilterBlock.setAttribute("open", "");
-			} else {
-				secondFilterBlock.removeAttribute("open");
-			}
-		};
-
-		onWindowClick = (event: MouseEvent) => {
-			const isLink = "href" in (event.target || {});
-			if (
-				isLink ||
-				(document.body.contains(event.target as Node) &&
-					!this.dialogFrame.contains(event.target as Node))
-			)
-				this.closeModal();
-		};
-
-		onWindowKeydown = (e: KeyboardEvent) => {
-			if ((e.metaKey || e.ctrlKey) && e.key === "k" && !this.dialog.open) {
-				this.openModal();
-				e.preventDefault();
-			}
-		};
-
-		openModal = (event?: MouseEvent) => {
-			if (!this.pagefindUI) {
-				this._loadPagefind?.();
-			}
-			this.dialog.showModal();
-			this.querySelector("input")?.focus();
-			event?.stopPropagation();
-			window.addEventListener("click", this.onWindowClick);
-		};
-
-		closeModal = () => {
-			if (this.dialog.open) {
-				this.dialog.close();
-				window.removeEventListener("click", this.onWindowClick);
-			}
-		};
+			return this.runtimePromise;
+		}
 	}
 
-	customElements.define("site-search", SiteSearch);
+	if (!customElements.get("site-search")) {
+		customElements.define("site-search", SiteSearch);
+	}
 </script>

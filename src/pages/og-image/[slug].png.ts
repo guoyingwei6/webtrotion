@@ -1,6 +1,5 @@
 import type { APIContext, GetStaticPaths } from "astro";
 import satori, { type SatoriOptions } from "satori";
-import { Resvg } from "@resvg/resvg-js";
 import { getFormattedDate } from "@/utils";
 import { buildTimeFilePath } from "@/lib/blog-helpers";
 import {
@@ -13,6 +12,7 @@ import {
 	downloadFile,
 	generateFilePath,
 	getDataSource,
+	isNotionHostedIconUrl,
 } from "@/lib/notion/client";
 import { getCollectionsWDesc } from "@/utils";
 import { siteInfo } from "@/siteInfo";
@@ -25,12 +25,10 @@ import {
 	BUILD_FOLDER_PATHS,
 	AUTHORS_CONFIG,
 } from "@/constants";
-import fs from "fs";
+import fs from "node:fs";
 import sharp from "sharp";
-import path from "path";
+import path from "node:path";
 import type { Database } from "@/lib/interfaces";
-
-// --- Helpers & Configuration ---
 
 const rgbToHex = (rgb: string) =>
 	"#" +
@@ -69,12 +67,21 @@ const getDataSourceCached = () => {
 	return dataSourcePromise;
 };
 
-// --- Image Processing ---
+type ImageResize = {
+	w: number;
+	h: number;
+	fit: "cover" | "inside";
+};
 
-const imageToDataUrl = async (filepath: string, resize?: { w: number; h: number }) => {
+const imageToDataUrl = async (filepath: string, resize?: ImageResize) => {
 	try {
 		let pipeline = sharp(filepath);
-		if (resize) pipeline = pipeline.resize(resize.w, resize.h);
+		if (resize) {
+			pipeline = pipeline.resize(resize.w, resize.h, {
+				fit: resize.fit,
+				withoutEnlargement: true,
+			});
+		}
 		const buffer = await pipeline.png().toBuffer();
 		return `data:image/png;base64,${buffer.toString("base64")}`;
 	} catch (err) {
@@ -83,30 +90,35 @@ const imageToDataUrl = async (filepath: string, resize?: { w: number; h: number 
 	}
 };
 
-// Prepare Logo
 let customIconURL = "";
-if (siteInfo.logo && siteInfo.logo.Type === "file") {
+const logo = siteInfo.logo;
+const logoUrl = logo && "Url" in logo ? logo.Url : null;
+const shouldUseLocalLogo =
+	logoUrl &&
+	(logo?.Type === "file" ||
+		logo?.Type === "custom_emoji" ||
+		logo?.Type === "icon" ||
+		isNotionHostedIconUrl(logoUrl));
+
+if (shouldUseLocalLogo) {
 	try {
-		customIconURL = path.join(
-			process.cwd(),
-			"public",
-			buildTimeFilePath(new URL(siteInfo.logo.Url)),
-		);
+		customIconURL = path.join(process.cwd(), "public", buildTimeFilePath(new URL(logoUrl)));
 	} catch (err) {
 		console.log("Invalid DB custom icon URL");
 	}
 }
 
 const logo_src =
-	siteInfo.logo && siteInfo.logo.Type === "external"
-		? siteInfo.logo.Url
-		: siteInfo.logo && siteInfo.logo.Type === "file" && customIconURL
-			? await imageToDataUrl(customIconURL, { w: 30, h: 30 })
+	logo?.Type === "external" && !shouldUseLocalLogo
+		? logoUrl
+		: siteInfo.logo && customIconURL
+			? await imageToDataUrl(customIconURL, { w: 30, h: 30, fit: "inside" })
 			: null;
 
 const normalizeOgImageSrc = async (
 	urlStr: string | undefined,
 	mode: "featured" | "author" = "featured",
+	resize: ImageResize = { w: 1200, h: 630, fit: "inside" },
 ): Promise<string | undefined> => {
 	if (!urlStr) return undefined;
 	try {
@@ -121,16 +133,16 @@ const normalizeOgImageSrc = async (
 			}
 			const publicPath = generateFilePath(publicPathUrl, false);
 			if (fs.existsSync(publicPath)) {
-				return (await imageToDataUrl(publicPath)) || publicPath;
+				return (await imageToDataUrl(publicPath, resize)) || publicPath;
 			}
 			const savedPath = await downloadFile(url, false, false, true);
-			return savedPath ? (await imageToDataUrl(savedPath)) || savedPath : undefined;
+			return savedPath ? (await imageToDataUrl(savedPath, resize)) || savedPath : undefined;
 		}
 
-		// Author mode
-		if (isPngLike) return urlStr;
+		// Sharp needs a local data URL.
 		const savedPath = await downloadFile(url, false, false, true);
-		return savedPath ? (await imageToDataUrl(savedPath)) || savedPath : undefined;
+		if (!savedPath) return undefined;
+		return (await imageToDataUrl(savedPath, resize)) || undefined;
 	} catch (err) {
 		console.error("Error normalizing OG image src:", err);
 		return undefined;
@@ -146,8 +158,6 @@ const isImageUrl = (url?: string) => {
 	}
 };
 
-// --- Fonts ---
-
 async function getFontFromGoogle(name: string, weight: number): Promise<SatoriOptions["fonts"][0]> {
 	const validWeight = weight < 100 || weight > 900 || !Number.isFinite(weight) ? 400 : weight;
 	const css = await fetch(
@@ -161,8 +171,14 @@ async function getFontFromGoogle(name: string, weight: number): Promise<SatoriOp
 	).then((res) => res.text());
 	const resource = css.match(/src: url\((.+)\) format\('(opentype|truetype)'\)/);
 	if (!resource) throw new Error(`Failed to find font URL for ${name}`);
-	const data = await fetch(resource[1]).then((res) => res.arrayBuffer());
-	return { name, style: "normal", weight: validWeight, data };
+	const fontUrl = resource[1]!;
+	const data = await fetch(fontUrl).then((res) => res.arrayBuffer());
+	return {
+		name,
+		style: "normal",
+		weight: validWeight as NonNullable<SatoriOptions["fonts"][number]["weight"]>,
+		data,
+	};
 }
 
 async function getOgFonts(): Promise<SatoriOptions["fonts"]> {
@@ -186,8 +202,6 @@ const getOgFontsCached = () => {
 	if (!ogFontsPromise) ogFontsPromise = getOgFonts();
 	return ogFontsPromise;
 };
-
-// --- Layout Builders ---
 
 const buildAuthorBlock = (author: string, size: number) => {
 	if (!author && !logo_src) return null;
@@ -242,7 +256,7 @@ const buildOgImage = ({
 	title: string;
 	date: string;
 	desc?: string;
-	img?: string;
+	img?: string | undefined;
 	author: string;
 	layout: "split" | "simple" | "bg";
 }) => {
@@ -466,8 +480,6 @@ const buildOgImage = ({
 	};
 };
 
-// --- Main Handler ---
-
 export async function GET(context: APIContext) {
 	const {
 		params: { slug },
@@ -479,8 +491,8 @@ export async function GET(context: APIContext) {
 	let keyStr = slug;
 	let type = "postpage";
 	if (keyStr?.includes("---")) {
-		const parts = slug.split("---");
-		type = parts[0];
+		const parts = (slug || "").split("---");
+		type = parts[0] || "";
 		keyStr = parts[1];
 	}
 
@@ -490,7 +502,6 @@ export async function GET(context: APIContext) {
 		post = await getPostBySlug(keyStr!);
 	}
 
-	// Prepare Content
 	let title = siteInfo.title;
 	let desc = "";
 	let dateStr = " ";
@@ -498,11 +509,9 @@ export async function GET(context: APIContext) {
 	let layout: "split" | "simple" | "bg" = "simple";
 	const featuredUrlStr = isPost ? post?.FeaturedImage?.Url : undefined;
 	const featuredExpiry = isPost ? post?.FeaturedImage?.ExpiryTime : undefined;
-	let featuredIsValidNow = false;
 	let needsImageNormalization = false;
 	let img: string | undefined = undefined;
 
-	// Determine Data based on Type
 	if (isPost) {
 		title = post?.Title
 			? post.Slug == HOME_PAGE_SLUG
@@ -522,11 +531,9 @@ export async function GET(context: APIContext) {
 		const hasValidImg =
 			featuredUrlStr && (!featuredExpiry || Date.parse(featuredExpiry) > Date.now());
 
-		featuredIsValidNow = !!hasValidImg;
 		if (hasValidImg) needsImageNormalization = true;
 		desc = (OG_SETUP["excerpt"] && post?.Excerpt) || "";
 
-		// Layout Logic
 		if (OG_SETUP["columns"] == 1 && hasValidImg) layout = "bg";
 		else if (OG_SETUP["columns"] && hasValidImg) layout = "split";
 		else layout = "simple";
@@ -543,7 +550,6 @@ export async function GET(context: APIContext) {
 		desc = (props as any)?.description || "";
 		const photo = (props as any)?.photo;
 		if (photo && isImageUrl(photo)) needsImageNormalization = true;
-		// Author Page Layout: Always split if image exists, regardless of desc
 		layout = photo && isImageUrl(photo) ? "split" : "simple";
 		author = ""; // Author name is in title
 	} else if (type === "tagsindex") {
@@ -557,14 +563,15 @@ export async function GET(context: APIContext) {
 		title = "All posts in one place";
 	}
 
-	// Cache reuse behavior:
-	// - Post pages: reuse if the post wasn't edited after LAST_BUILD_TIME and image exists.
-	// - Collection/tag/author pages: reuse if the *data source* wasn't edited after LAST_BUILD_TIME and image exists.
-	// - Index pages: same data source check (and file exists).
+	// Reuse images whose source predates the last build.
 	const canConsiderReuse = !!LAST_BUILD_TIME && fs.existsSync(imagePath);
 	if (canConsiderReuse) {
 		if (isPost) {
-			if (post?.LastUpdatedTimeStamp && post.LastUpdatedTimeStamp < LAST_BUILD_TIME) {
+			if (
+				LAST_BUILD_TIME &&
+				post?.LastUpdatedTimeStamp &&
+				post.LastUpdatedTimeStamp < LAST_BUILD_TIME
+			) {
 				return new Response(fs.readFileSync(imagePath), {
 					headers: {
 						"Content-Type": "image/png",
@@ -574,7 +581,11 @@ export async function GET(context: APIContext) {
 			}
 		} else {
 			const dataSource = await getDataSourceCached();
-			if (dataSource?.LastUpdatedTimeStamp && dataSource.LastUpdatedTimeStamp < LAST_BUILD_TIME) {
+			if (
+				LAST_BUILD_TIME &&
+				dataSource?.LastUpdatedTimeStamp &&
+				dataSource.LastUpdatedTimeStamp < LAST_BUILD_TIME
+			) {
 				return new Response(fs.readFileSync(imagePath), {
 					headers: {
 						"Content-Type": "image/png",
@@ -585,10 +596,13 @@ export async function GET(context: APIContext) {
 		}
 	}
 
-	// Only resolve/normalize image sources when we actually need to (regeneration path).
 	if (needsImageNormalization) {
 		if (isPost) {
-			img = await normalizeOgImageSrc(featuredUrlStr);
+			img = await normalizeOgImageSrc(featuredUrlStr, "featured", {
+				w: 1200,
+				h: 630,
+				fit: layout === "bg" ? "cover" : "inside",
+			});
 		} else if (type === "authorpage") {
 			const photo = (props as any)?.photo;
 			if (photo && isImageUrl(photo)) {
@@ -600,10 +614,9 @@ export async function GET(context: APIContext) {
 	const fonts = await getOgFontsCached();
 	const ogOptions: SatoriOptions = { width: 1200, height: 630, fonts };
 
-	// Generate
 	const markup = buildOgImage({ title, date: dateStr, desc, img, author, layout });
 
-	// Fallback markup (always simple layout) in case of Satori failure with images
+	// Retry without an image if Satori rejects the markup.
 	const fallbackMarkup = buildOgImage({
 		title,
 		date: dateStr,
@@ -621,7 +634,7 @@ export async function GET(context: APIContext) {
 		svg = await satori(fallbackMarkup as any, ogOptions);
 	}
 
-	let pngBuffer = new Resvg(svg).render().asPng();
+	let pngBuffer = await sharp(Buffer.from(svg)).png().toBuffer();
 
 	if (pngBuffer.length > 102400) {
 		pngBuffer = await sharp(pngBuffer).png({ quality: 80 }).toBuffer();
@@ -643,7 +656,7 @@ export const getStaticPaths: GetStaticPaths = async () => {
 	const postsMap = posts.map(({ Slug }) => ({ params: { slug: Slug } }));
 
 	const collectionsWDesc = await getCollectionsWDesc();
-	const collectionMap = collectionsWDesc.map((c) => ({
+	const collectionMap = (collectionsWDesc || []).map((c) => ({
 		params: { slug: "collectionpage---" + c.name },
 		props: { description: c.description },
 	}));

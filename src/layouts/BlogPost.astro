@@ -11,6 +11,8 @@ import { adjustedFootnotesConfig } from "@/lib/notion/client";
 import InterlinkedContentSection from "@/components/auto-added-sections/interlinked-content/InterlinkedContentSection.astro";
 import Icon from "@/components/ui/Icon.astro";
 import CopyMarkdownButton from "@/components/auto-added-sections/CopyMarkdownButton.astro";
+import { getMachineDateISOString } from "@/utils/date";
+import PagefindIconMetadata from "@/components/ui/PagefindIconMetadata.astro";
 
 interface Props {
 	post: Post;
@@ -19,6 +21,7 @@ interface Props {
 	shouldUseCache: boolean;
 	footnotesInPage?: any[] | null;
 	showCopyMarkdownButton?: boolean;
+	hasMarkdownAlternate?: boolean;
 }
 
 const {
@@ -28,6 +31,7 @@ const {
 	shouldUseCache,
 	footnotesInPage,
 	showCopyMarkdownButton = false,
+	hasMarkdownAlternate,
 } = Astro.props;
 
 // Add Interlinked Content heading to TOC if interlinked content exist
@@ -54,7 +58,7 @@ if (
 }
 
 const socialImage = ogImage ? ogImage : `/og-image/${post.Slug}.png`;
-const articleDate = new Date(post.Date).toISOString();
+const articleDate = getMachineDateISOString(post.Date) || undefined;
 
 // Get author string for meta tag (falls back to siteInfo.author in BaseHead if undefined)
 const getMetaAuthor = (): string | undefined => {
@@ -73,10 +77,12 @@ const metaAuthor = getMetaAuthor();
 		articleDate,
 		ogImage: socialImage,
 		author: metaAuthor,
+		hasMarkdownAlternate,
 	}}
 >
-	<div class="max-w-[708px] sm:mr-20 print:mr-auto print:max-w-full">
+	<div class="reading-column">
 		<article class="break-words" data-pagefind-body>
+			<PagefindIconMetadata post={post} />
 			<div id="blog-hero">
 				<BlogHero post={post} />
 			</div>
@@ -114,18 +120,18 @@ const metaAuthor = getMetaAuthor();
 		const scrollBtn = document.getElementById("to-top-btn");
 		const targetHeader = document.getElementById("blog-hero");
 
-		function callback(entries) {
+		function callback(entries: IntersectionObserverEntry[]) {
 			entries.forEach((entry) => {
-				if (entry.target === targetHeader) {
+				if (entry.target === targetHeader && scrollBtn) {
 					scrollBtn.dataset.show = (!entry.isIntersecting).toString();
 				}
 			});
 		}
 
-		scrollBtn.addEventListener("click", () => {
+		scrollBtn?.addEventListener("click", () => {
 			document.documentElement.scrollTo({ top: 0, behavior: "smooth" });
 		});
 		const observer = new IntersectionObserver(callback);
-		observer.observe(targetHeader);
+		if (targetHeader) observer.observe(targetHeader);
 	});
 </script>

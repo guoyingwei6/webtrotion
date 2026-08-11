@@ -1,28 +1,11 @@
-/**
- * Citations Extraction System
- *
- * This module contains ALL citation extraction logic for Webtrotion.
- * It handles:
- * - Fetching BibTeX files from GitHub, Dropbox, Google Drive
- * - Parsing BibTeX entries using citation-js
- * - Extracting citations from text ([@key], \cite{key}, #cite(key))
- * - Formatting citations as APA or IEEE
- * - Generating bibliographies
- *
- * Key principles:
- * - Preserve ALL RichText formatting (bold, italic, colors, etc.)
- * - Process at BUILD-TIME only (in client.ts)
- * - Components have ZERO logic, only render pre-processed data
- * - Cache BibTeX files with timestamp checking
- */
-
-import fs from "fs";
-import path from "path";
-import crypto from "crypto";
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
 import axios from "axios";
-import { Cite } from "@citation-js/core";
+import { Cite, plugins } from "@citation-js/core";
 import "@citation-js/plugin-bibtex";
 import "@citation-js/plugin-csl";
+import acmSigProceedingsStyle from "../utils/acm-sig-proceedings.csl?raw";
 import type {
 	Block,
 	RichText,
@@ -35,26 +18,15 @@ import type {
 } from "./interfaces";
 import {
 	getAllRichTextLocations,
-	cloneRichText,
 	joinPlainText,
 	getChildrenFromBlock,
 	splitRichTextsAtCharPosition,
 } from "../utils/richtext-utils";
 import { BUILD_FOLDER_PATHS, LAST_BUILD_TIME, BIBLIOGRAPHY_STYLE } from "../constants";
 
-// ============================================================================
-// URL Normalization and Source Detection
-// ============================================================================
+// Keep the existing simplified-ieee setting, backed by the public ACM SIG Proceedings CSL style.
+plugins.config.get("@csl").styles.add("simplified-ieee", acmSigProceedingsStyle);
 
-/**
- * Converts a share link to a direct-download URL and provides timestamp checking info
- *
- * Supports:
- * - GitHub Gist: https://gist.github.com/user/id
- * - GitHub Repo: https://github.com/user/repo/blob/branch/path/file.bib
- * - Dropbox: https://www.dropbox.com/scl/fi/.../file.bib?dl=0
- * - Google Drive: https://drive.google.com/file/d/FILE_ID/view
- */
 export function get_bib_source_info(url: string): BibSourceInfo {
 	// GitHub Gist
 	const gistMatch = url.match(/gist\.github\.com\/([^\/]+)\/([a-f0-9]+)/);
@@ -111,14 +83,6 @@ export function get_bib_source_info(url: string): BibSourceInfo {
 	};
 }
 
-// ============================================================================
-// BibTeX File Fetching with Caching
-// ============================================================================
-
-/**
- * Gets last-updated timestamp for a GitHub source
- * Returns null if unavailable or on error
- */
 async function getGitHubLastUpdated(updatedUrl: string): Promise<string | null> {
 	try {
 		const response = await axios.get(updatedUrl, { timeout: 5000 });
@@ -212,29 +176,47 @@ export async function fetchBibTeXFile(url: string): Promise<string> {
 	}
 }
 
-// ============================================================================
-// BibTeX Parsing and Formatting
-// ============================================================================
+function renderBibliography(data: any, template: "apa" | "simplified-ieee"): string {
+	return new Cite([data])
+		.format("bibliography", { format: "html", template, lang: "en-US" })
+		.replace(/<div[^>]*>|<\/div>/g, "")
+		.trim();
+}
 
-/**
- * Formats a BibTeX entry using citation-js
- */
+// Private-use sentinels wrapped around the raw title before rendering. citeproc passes
+// them through untouched (surviving its HTML-entity escaping and smart-quote/italic
+// transforms), so a single render + one replace links only the title in the source URL —
+// no second render, no matching against a stored title.
+const TITLE_START = "\uE000";
+const TITLE_END = "\uE001";
+
 function formatBibEntry(
 	entry: any,
-	template: "apa" | "ieee",
+	template: "apa" | "simplified-ieee",
 	authors: string,
 	year: string,
+	url?: string,
 ): string {
 	try {
 		const entryForFormatting = { ...entry };
 		delete entryForFormatting.URL;
-		const cite = new Cite([entryForFormatting]);
-		const formatted = cite.format("bibliography", {
-			format: "html",
-			template,
-			lang: "en-US",
-		});
-		return formatted.replace(/<div[^>]*>|<\/div>/g, "").trim();
+		if (url && entryForFormatting.title) {
+			// Strip any pre-existing sentinels (e.g. icon-font glyphs in the title) so the
+			// only occurrences in the rendered output are the ones we inject here.
+			const rawTitle = String(entryForFormatting.title).replace(
+				new RegExp(`[${TITLE_START}${TITLE_END}]`, "g"),
+				"",
+			);
+			entryForFormatting.title = `${TITLE_START}${rawTitle}${TITLE_END}`;
+		}
+		const formatted = renderBibliography(entryForFormatting, template);
+		if (!url) return formatted;
+		const href = url.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+		return formatted.replace(
+			new RegExp(`${TITLE_START}([\\s\\S]*?)${TITLE_END}`),
+			(_match, title) =>
+				`<a href="${href}" target="_blank" rel="noopener noreferrer" class="text-link site-page-link decoration-solid">${title}</a>`,
+		);
 	} catch (error) {
 		console.warn(`Failed to format ${template.toUpperCase()} citation for ${entry.id}:`, error);
 		const title = entry.title || "Untitled";
@@ -286,8 +268,8 @@ function parseAndFormatBibTeXContent(content: string): Map<string, ParsedCitatio
 			}
 		}
 
-		const ieeeFormatted = formatBibEntry(entry, "ieee", authors, year);
-		const apaFormatted = formatBibEntry(entry, "apa", authors, year);
+		const ieeeFormatted = formatBibEntry(entry, "simplified-ieee", authors, year, url);
+		const apaFormatted = formatBibEntry(entry, "apa", authors, year, url);
 
 		entries.set(key, {
 			key,
@@ -488,7 +470,7 @@ function extractCitationsFromRichTextArray(
 		}
 
 		matches.push({
-			key: match[1],
+			key: match[1] || "",
 			start: match.index,
 			end: match.index + match[0].length,
 			fullMatch: match[0],

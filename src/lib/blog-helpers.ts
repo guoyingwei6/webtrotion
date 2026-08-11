@@ -9,6 +9,7 @@ import type {
 	Heading1,
 	Heading2,
 	Heading3,
+	Heading4,
 	RichText,
 	Column,
 	InterlinkedContentInPage,
@@ -18,7 +19,7 @@ import type {
 } from "@/lib/interfaces";
 import type { ImageMetadata } from "astro";
 import { slugify } from "../utils/slugify";
-import path from "path";
+import path from "node:path";
 import fs from "node:fs";
 import { getBlock, getPostByPageId } from "../lib/notion/client";
 import superjson from "superjson";
@@ -26,14 +27,14 @@ import { prepareBibliography } from "./citations";
 import { joinPlainText } from "../utils/richtext-utils";
 
 const BASE_PATH = import.meta.env.BASE_URL;
-let downloadedImagesinSrc = null;
+let downloadedImagesinSrc: Record<string, { default: ImageMetadata }> | null = null;
 let interlinkedContentInPageCache: { [entryId: string]: InterlinkedContentInPage[] } | null = null;
 let interlinkedContentToPageCache: {
 	[entryId: string]: { entryId: string; block: Block }[];
 } | null = null;
 let firstImage = true;
 let track_current_page_id: string | null = null;
-let current_headings = null;
+let current_headings: unknown = null;
 
 function getDownloadedImagesInSrc() {
 	if (!downloadedImagesinSrc) {
@@ -49,7 +50,7 @@ export async function getNotionImage(url: URL): Promise<ImageMetadata | null> {
 	// Extract the second-to-last and last segments (matches generateFilePath logic)
 	const segments = url.pathname.split("/");
 	let dirName = segments.slice(-2)[0];
-	let filename = decodeURIComponent(segments.slice(-1)[0]);
+	let filename = decodeURIComponent(segments.slice(-1)[0] || "");
 
 	if (url.hostname.includes("unsplash")) {
 		if (url.searchParams.has("fm")) {
@@ -87,7 +88,7 @@ export function getImageComponentFormat(
 	return "webp";
 }
 
-export function setCurrentHeadings(headings) {
+export function setCurrentHeadings(headings: unknown) {
 	current_headings = headings;
 	return true;
 }
@@ -119,12 +120,12 @@ export function setTrackCurrentPageId(pageId: string) {
 
 export const filePath = (url: URL): string => {
 	const [dir, filename] = url.pathname.split("/").slice(-2);
-	return path.join(BASE_PATH, `/notion/${dir}/${decodeURIComponent(filename)}`);
+	return path.join(BASE_PATH, `/notion/${dir || ""}/${decodeURIComponent(filename || "")}`);
 };
 
 export const buildTimeFilePath = (url: URL): string => {
 	const [dir, filename] = url.pathname.split("/").slice(-2);
-	return `/notion/${dir}/${decodeURIComponent(filename)}`;
+	return `/notion/${dir || ""}/${decodeURIComponent(filename || "")}`;
 };
 
 export function getInterlinkedContentInPage(entryId: string) {
@@ -182,6 +183,8 @@ export const extractTargetBlocks = (blockTypes: string[], blocks: Block[]): Bloc
 
 			if (block.ColumnList && block.ColumnList.Columns) {
 				acc = acc.concat(_extractTargetBlockFromColumns(blockTypes, block.ColumnList.Columns));
+			} else if (block.Tab && block.Tab.Children) {
+				acc = acc.concat(extractTargetBlocks(blockTypes, block.Tab.Children));
 			} else if (block.BulletedListItem && block.BulletedListItem.Children) {
 				acc = acc.concat(extractTargetBlocks(blockTypes, block.BulletedListItem.Children));
 			} else if (block.NumberedListItem && block.NumberedListItem.Children) {
@@ -200,6 +203,8 @@ export const extractTargetBlocks = (blockTypes: string[], blocks: Block[]): Bloc
 				acc = acc.concat(extractTargetBlocks(blockTypes, block.Heading2.Children));
 			} else if (block.Heading3 && block.Heading3.Children) {
 				acc = acc.concat(extractTargetBlocks(blockTypes, block.Heading3.Children));
+			} else if (block.Heading4 && block.Heading4.Children) {
+				acc = acc.concat(extractTargetBlocks(blockTypes, block.Heading4.Children));
 			} else if (block.Quote && block.Quote.Children) {
 				acc = acc.concat(extractTargetBlocks(blockTypes, block.Quote.Children));
 			} else if (block.Callout && block.Callout.Children) {
@@ -277,6 +282,7 @@ const _extractInterlinkedContentInBlock = (
 		block.Heading1?.RichTexts ||
 		block.Heading2?.RichTexts ||
 		block.Heading3?.RichTexts ||
+		block.Heading4?.RichTexts ||
 		block.LinkPreview?.Caption ||
 		block.NAudio?.Caption ||
 		block.NImage?.Caption ||
@@ -378,7 +384,7 @@ export const buildURLToHTMLMap = async (urls: URL[]): Promise<{ [key: string]: s
 
 					return html;
 				} catch (e) {
-					console.log(`Failed to fetch ${url.toString()}:`, e.message || e);
+					console.log(`Failed to fetch ${url.toString()}:`, e instanceof Error ? e.message : e);
 					return "";
 				} finally {
 					clearTimeout(timeout);
@@ -436,10 +442,19 @@ export const getAnchorLinkAndBlock = async (
 	if (post && richText.InternalHref?.BlockId) {
 		block_linked = await getBlock(richText.InternalHref?.BlockId);
 		block_linked_id = block_linked ? block_linked.Id : null;
-		if (block_linked && (block_linked.Heading1 || block_linked.Heading2 || block_linked.Heading3)) {
-			block_linked_id = buildHeadingId(
-				block_linked.Heading1 || block_linked.Heading2 || block_linked.Heading3,
-			);
+		if (
+			block_linked &&
+			(block_linked.Heading1 ||
+				block_linked.Heading2 ||
+				block_linked.Heading3 ||
+				block_linked.Heading4)
+		) {
+			const heading =
+				block_linked.Heading1 ||
+				block_linked.Heading2 ||
+				block_linked.Heading3 ||
+				block_linked.Heading4;
+			if (heading) block_linked_id = buildHeadingId(heading);
 			isBlockLinkedHeading = true;
 		}
 	}
@@ -512,10 +527,19 @@ export const getInterlinkedContentLink = async (
 			: null;
 	let block_linked_id = block_linked ? block_linked.Id : null;
 	if (linkedpost || currentOverride) {
-		if (block_linked && (block_linked.Heading1 || block_linked.Heading2 || block_linked.Heading3)) {
-			block_linked_id = buildHeadingId(
-				block_linked.Heading1 || block_linked.Heading2 || block_linked.Heading3,
-			);
+		if (
+			block_linked &&
+			(block_linked.Heading1 ||
+				block_linked.Heading2 ||
+				block_linked.Heading3 ||
+				block_linked.Heading4)
+		) {
+			const heading =
+				block_linked.Heading1 ||
+				block_linked.Heading2 ||
+				block_linked.Heading3 ||
+				block_linked.Heading4;
+			if (heading) block_linked_id = buildHeadingId(heading);
 		}
 	}
 
@@ -547,7 +571,7 @@ export const getPostLink = (slug: string, isRoot: boolean = false): string => {
 	return linkedPath.endsWith("/") ? linkedPath : `${linkedPath}/`; // Ensure trailing slash
 };
 
-export const buildHeadingId = (heading: Heading1 | Heading2 | Heading3) => {
+export const buildHeadingId = (heading: Heading1 | Heading2 | Heading3 | Heading4) => {
 	return slugify(joinPlainText(heading.RichTexts).trim());
 };
 
@@ -709,7 +733,7 @@ export const parseYouTubeVideoIdTitle = async (url: URL): Promise<[string, strin
 	let id = "";
 
 	if (url.hostname === "youtu.be") {
-		id = url.pathname.split("/")[1];
+		id = url.pathname.split("/")[1] || "";
 	} else if (url.pathname === "/watch") {
 		id = url.searchParams.get("v") || "";
 	} else {
@@ -720,7 +744,7 @@ export const parseYouTubeVideoIdTitle = async (url: URL): Promise<[string, strin
 		}
 
 		if (elements[1] === "v" || elements[1] === "embed" || elements[1] === "live") {
-			id = elements[2];
+			id = elements[2] || "";
 		}
 	}
 
@@ -996,10 +1020,12 @@ export function extractPageContent(
 		const childBlocks: Block[] = [];
 
 		// Collect all possible children
+		if (block.Tab?.Children) childBlocks.push(...block.Tab.Children);
 		if (block.Paragraph?.Children) childBlocks.push(...block.Paragraph.Children);
 		if (block.Heading1?.Children) childBlocks.push(...block.Heading1.Children);
 		if (block.Heading2?.Children) childBlocks.push(...block.Heading2.Children);
 		if (block.Heading3?.Children) childBlocks.push(...block.Heading3.Children);
+		if (block.Heading4?.Children) childBlocks.push(...block.Heading4.Children);
 		if (block.Quote?.Children) childBlocks.push(...block.Quote.Children);
 		if (block.Callout?.Children) childBlocks.push(...block.Callout.Children);
 		if (block.Toggle?.Children) childBlocks.push(...block.Toggle.Children);
@@ -1007,7 +1033,9 @@ export function extractPageContent(
 		if (block.NumberedListItem?.Children) childBlocks.push(...block.NumberedListItem.Children);
 		if (block.ToDo?.Children) childBlocks.push(...block.ToDo.Children);
 		if (block.SyncedBlock?.Children) childBlocks.push(...block.SyncedBlock.Children);
-		if (block.Table?.Children) childBlocks.push(...block.Table.Children);
+		const tableChildren = (block.Table as (typeof block.Table & { Children?: Block[] }) | undefined)
+			?.Children;
+		if (tableChildren) childBlocks.push(...tableChildren);
 
 		// Recurse into children
 		childBlocks.forEach(processBlock);

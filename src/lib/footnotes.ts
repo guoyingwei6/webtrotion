@@ -1,19 +1,3 @@
-/**
- * Footnotes Extraction System
- *
- * This module contains ALL footnote extraction logic for Webtrotion.
- * It handles:
- * - End-of-block footnotes ([^ft_a]: content at end of RichText)
- * - Start-of-child-blocks footnotes (child blocks as footnote content)
- * - Block-comments footnotes (Notion comments as footnote content)
- * - Inline LaTeX footnote command (\footnote{content} with rich text support)
- *
- * Key principles:
- * - Preserve ALL RichText formatting (bold, italic, colors, etc.)
- * - Process at BUILD-TIME only (in client.ts)
- * - Components have ZERO logic, only render pre-processed data
- */
-
 import type {
 	Block,
 	RichText,
@@ -33,11 +17,8 @@ import {
 	getAllRichTextLocations,
 	getChildrenFromBlock,
 } from "../utils/richtext-utils";
-import crypto from "crypto";
+import crypto from "node:crypto";
 
-// ============================================================================
-// Configuration and Validation
-// ============================================================================
 function getActiveSource(
 	config: FootnotesConfig,
 ):
@@ -54,10 +35,6 @@ function getActiveSource(
 	return null;
 }
 
-// ============================================================================
-// Marker Detection and Extraction
-// ============================================================================
-
 function findAllFootnoteMarkers(
 	locations: RichTextLocation[],
 	markerPrefix: string,
@@ -72,8 +49,8 @@ function findAllFootnoteMarkers(
 		let match: RegExpExecArray | null;
 
 		while ((match = pattern.exec(fullText)) !== null) {
-			const marker = match[1]; // e.g., "a" from "[^ft_a]"
-			const fullMarker = match[0]; // e.g., "[^ft_a]"
+			const marker = match[1]!; // e.g., "a" from "[^ft_a]"
+			const fullMarker = match[0]!; // e.g., "[^ft_a]"
 			const charStart = match.index;
 			const charEnd = charStart + fullMarker.length;
 
@@ -82,10 +59,10 @@ function findAllFootnoteMarkers(
 			let richTextIndex = -1;
 			let shouldSkip = false;
 			for (let i = 0; i < location.richTexts.length; i++) {
-				const len = location.richTexts[i].PlainText.length;
+				const richText = location.richTexts[i]!;
+				const len = richText.PlainText.length;
 				if (currentPos <= charStart && charStart < currentPos + len) {
 					richTextIndex = i;
-					const richText = location.richTexts[i];
 					// Skip if in code, equation, or mention
 					if (richText.Annotation.Code || richText.Equation || richText.Mention) {
 						shouldSkip = true;
@@ -159,10 +136,6 @@ function splitRichTextWithMarkers(
 	return result;
 }
 
-// ============================================================================
-// End-of-Block Extraction
-// ============================================================================
-
 function extractFootnoteDefinitionsFromRichText(
 	richTexts: RichText[],
 	markerPrefix: string,
@@ -218,8 +191,8 @@ function parseFootnoteDefinitionsFromRichText(
 	// Find all definition starts
 	while ((match = pattern.exec(definitionsText)) !== null) {
 		matches.push({
-			marker: match[1],
-			start: match.index + match[0].length, // After the "[^ft_a]: " part
+			marker: match[1]!,
+			start: match.index + match[0]!.length, // After the "[^ft_a]: " part
 			matchIndex: match.index, // Start of "\n\n[^ft_a]:"
 			end: -1, // Will be set later
 		});
@@ -229,9 +202,12 @@ function parseFootnoteDefinitionsFromRichText(
 	for (let i = 0; i < matches.length; i++) {
 		if (i < matches.length - 1) {
 			// End at the position where next footnote marker starts (before the \n\n)
-			matches[i].end = matches[i + 1].matchIndex;
+			const currentMatch = matches[i]!;
+			const nextMatch = matches[i + 1]!;
+			currentMatch.end = nextMatch.matchIndex;
 		} else {
-			matches[i].end = definitionsText.length;
+			const currentMatch = matches[i]!;
+			currentMatch.end = definitionsText.length;
 		}
 	}
 
@@ -290,6 +266,12 @@ function extractEndOfBlockFootnotes(
 		);
 
 		// Create Footnote objects from extracted definitions
+		const tableCellMatch = location.property.match(/Table\.Rows\[(\d+)\]\.Cells\[(\d+)\]/);
+		const sourceLocation: Footnote["SourceLocation"] = location.property.includes("Caption")
+			? "caption"
+			: location.property.includes("Table")
+				? "table"
+				: "content";
 		footnoteDefinitions.forEach((contentRichTexts, marker) => {
 			const hasMarker = markers.some((m) => m.Marker === marker);
 			// Only create footnote if there's a marker in the text (silent skip orphaned definitions)
@@ -301,11 +283,13 @@ function extractEndOfBlockFootnotes(
 						Type: "rich_text",
 						RichTexts: contentRichTexts,
 					},
-					SourceLocation: location.property.includes("Caption")
-						? "caption"
-						: location.property.includes("Table")
-							? "table"
-							: "content",
+					SourceLocation: sourceLocation,
+					...(tableCellMatch && {
+						SourceTableCell: {
+							row: Number(tableCellMatch[1]),
+							cell: Number(tableCellMatch[2]),
+						},
+					}),
 				});
 			}
 		});
@@ -324,10 +308,6 @@ function extractEndOfBlockFootnotes(
 	return { footnotes, hasProcessedRichTexts: true, hasProcessedChildren: false };
 }
 
-// ============================================================================
-// Start-of-Child-Blocks Extraction
-// ============================================================================
-
 /**
  * Creates a regex pattern to match footnote content markers
  * Pattern: ^\[^ft_(\w+)\]:\s* matches [^ft_a]: at line start and captures "a"
@@ -339,10 +319,12 @@ function createContentPattern(markerPrefix: string): RegExp {
 
 // Sets children array in a block
 function setChildrenInBlock(block: Block, children: Block[]): void {
-	if (block.Paragraph) block.Paragraph.Children = children;
+	if (block.Tab) block.Tab.Children = children;
+	else if (block.Paragraph) block.Paragraph.Children = children;
 	else if (block.Heading1) block.Heading1.Children = children;
 	else if (block.Heading2) block.Heading2.Children = children;
 	else if (block.Heading3) block.Heading3.Children = children;
+	else if (block.Heading4) block.Heading4.Children = children;
 	else if (block.Quote) block.Quote.Children = children;
 	else if (block.Callout) block.Callout.Children = children;
 	else if (block.Toggle) block.Toggle.Children = children;
@@ -365,7 +347,7 @@ function removeMarkerPrefix(richTexts: RichText[], prefixLength: number): RichTe
 	let remaining = prefixLength;
 
 	for (let i = 0; i < result.length && remaining > 0; i++) {
-		const richText = result[i];
+		const richText = result[i]!;
 		const length = richText.PlainText.length;
 
 		if (length <= remaining) {
@@ -438,7 +420,8 @@ function extractStartOfChildBlocksFootnotes(
 			return;
 		}
 
-		const blockText = joinPlainText(blockLocations[0].richTexts);
+		const firstLocation = blockLocations[0]!;
+		const blockText = joinPlainText(firstLocation.richTexts);
 
 		// Reset regex state before each exec
 		contentPattern.lastIndex = 0;
@@ -449,11 +432,11 @@ function extractStartOfChildBlocksFootnotes(
 			return;
 		}
 
-		const marker = match[1];
+		const marker = match[1]!;
 
 		// Remove the [^marker]: prefix from the block
-		const cleanedRichTexts = removeMarkerPrefix(blockLocations[0].richTexts, match[0].length);
-		blockLocations[0].setter(cleanedRichTexts);
+		const cleanedRichTexts = removeMarkerPrefix(firstLocation.richTexts, match[0]!.length);
+		firstLocation.setter(cleanedRichTexts);
 
 		// Create footnote with the entire block (and its descendants) as content
 		footnotes.push({
@@ -489,10 +472,6 @@ function extractStartOfChildBlocksFootnotes(
 		hasProcessedChildren: true,
 	};
 }
-
-// ============================================================================
-// Block-Comments Extraction
-// ============================================================================
 
 /**
  * Extracts footnotes from Notion block comments
@@ -557,7 +536,7 @@ async function extractBlockCommentsFootnotes(
 				continue; // Not a footnote comment
 			}
 
-			const marker = match[1];
+			const marker = match[1]!;
 
 			// Convert Notion comment rich_text to our RichText format
 			const contentRichTexts = await Promise.all(richTextArray.map(_buildRichText));
@@ -637,10 +616,6 @@ async function extractBlockCommentsFootnotes(
 	}
 }
 
-// ============================================================================
-// Inline LaTeX Footnote Command Extraction
-// ============================================================================
-
 /**
  * Finds the matching closing brace for an opening brace, handling escaped braces
  * Escaped braces (\{ and \}) are treated as literal characters, not structural braces
@@ -682,7 +657,7 @@ function findMatchingClosingBrace(text: string, startPos: number): number {
  */
 function extractInlineLatexFootnotes(
 	block: Block,
-	config: FootnotesConfig,
+	_config: FootnotesConfig,
 ): FootnoteExtractionResult {
 	const locations = getAllRichTextLocations(block);
 	const footnotes: Footnote[] = [];
@@ -785,7 +760,7 @@ function extractInlineLatexFootnotes(
 				const unescaped = cloneRichText(rt);
 				unescaped.PlainText = rt.PlainText.replaceAll("\\{", "{").replaceAll("\\}", "}");
 				if (unescaped.Text) {
-					unescaped.Text.Content = rt.Text.Content.replaceAll("\\{", "{").replaceAll("\\}", "}");
+					unescaped.Text.Content = rt.Text!.Content.replaceAll("\\{", "{").replaceAll("\\}", "}");
 				}
 				return unescaped;
 			});
@@ -799,6 +774,7 @@ function extractInlineLatexFootnotes(
 			}
 
 			// Create footnote object
+			const tableCellMatch = location.property.match(/Table\.Rows\[(\d+)\]\.Cells\[(\d+)\]/);
 			footnotes.unshift({
 				// unshift to maintain left-to-right order
 				Marker: m.marker,
@@ -812,6 +788,12 @@ function extractInlineLatexFootnotes(
 					: location.property.includes("Table")
 						? "table"
 						: "content",
+				...(tableCellMatch && {
+					SourceTableCell: {
+						row: Number(tableCellMatch[1]),
+						cell: Number(tableCellMatch[2]),
+					},
+				}),
 			});
 
 			// Replace \footnote{content} with marker in RichText
@@ -850,10 +832,6 @@ function extractInlineLatexFootnotes(
 		hasProcessedChildren: false,
 	};
 }
-
-// ============================================================================
-// Main Entry Point
-// ============================================================================
 
 /**
  * Extract footnotes from a block with support for all footnote sources

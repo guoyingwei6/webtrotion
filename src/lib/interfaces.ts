@@ -35,7 +35,7 @@ export interface Post {
 	 * - []: Authors property exists but is empty on this post (use default author from config)
 	 * - AuthorProperty[]: One or more authors assigned to this post
 	 */
-	Authors?: AuthorProperty[];
+	Authors?: AuthorProperty[] | undefined;
 }
 
 export type ExternalContentType = "html" | "markdown" | "mdx";
@@ -56,6 +56,7 @@ export interface Block {
 	Heading1?: Heading1;
 	Heading2?: Heading2;
 	Heading3?: Heading3;
+	Heading4?: Heading4;
 	BulletedListItem?: BulletedListItem;
 	NumberedListItem?: NumberedListItem;
 	ToDo?: ToDo;
@@ -72,6 +73,7 @@ export interface Block {
 	Equation?: Equation;
 	Callout?: Callout;
 	SyncedBlock?: SyncedBlock;
+	Tab?: Tab;
 	Toggle?: Toggle;
 	Embed?: Embed;
 	Video?: Video;
@@ -81,11 +83,12 @@ export interface Block {
 	ColumnList?: ColumnList;
 	TableOfContents?: TableOfContents;
 	LinkToPage?: LinkToPage;
+	ListItems?: Block[];
 
 	// Footnotes (populated by extractFootnotes during build)
-	Footnotes?: Footnote[];
+	Footnotes?: Footnote[] | undefined;
 	// Citations (populated by extractCitations during build)
-	Citations?: Citation[];
+	Citations?: Citation[] | undefined;
 }
 
 export interface InterlinkedContentInPage {
@@ -119,6 +122,13 @@ export interface Heading2 {
 }
 
 export interface Heading3 {
+	RichTexts: RichText[];
+	Color: string;
+	IsToggleable: boolean;
+	Children?: Block[];
+}
+
+export interface Heading4 {
 	RichTexts: RichText[];
 	Color: string;
 	IsToggleable: boolean;
@@ -182,6 +192,19 @@ export interface FileObject {
 	Url: string;
 	ExpiryTime?: string;
 	Size?: number;
+	Id?: string;
+	Name?: string;
+	Color?:
+		| "gray"
+		| "lightgray"
+		| "brown"
+		| "yellow"
+		| "orange"
+		| "green"
+		| "blue"
+		| "purple"
+		| "pink"
+		| "red";
 }
 
 export interface External {
@@ -192,12 +215,17 @@ export interface Code {
 	Caption: RichText[];
 	RichTexts: RichText[];
 	Language: string;
+	RenderMode?: "iframe";
+	IframeSizing?: {
+		Height?: number;
+		AspectRatio?: string;
+	};
 }
 
 export interface Quote {
 	RichTexts: RichText[];
 	Color: string;
-	Children?: Block[];
+	Children?: Block[] | undefined;
 }
 
 export interface Equation {
@@ -208,7 +236,7 @@ export interface Callout {
 	RichTexts: RichText[];
 	Icon: FileObject | Emoji | null;
 	Color: string;
-	Children?: Block[];
+	Children?: Block[] | undefined;
 }
 
 export interface SyncedBlock {
@@ -218,6 +246,10 @@ export interface SyncedBlock {
 
 export interface SyncedFrom {
 	BlockId: string;
+}
+
+export interface Tab {
+	Children?: Block[];
 }
 
 export interface Toggle {
@@ -270,36 +302,36 @@ export interface Column {
 	Children: Block[];
 }
 
-export interface List {
-	Type: string;
+export type List = Block & {
+	Type: "bulleted_list" | "numbered_list" | "to_do_list";
 	ListItems: Block[];
-}
+};
 
 export interface TableOfContents {
 	Color: string;
 }
 
 export interface RichText {
-	Text?: Text;
+	Text?: Text | undefined;
 	Annotation: Annotation;
 	PlainText: string;
-	Href?: string;
-	Equation?: Equation;
-	Mention?: Mention;
-	InternalHref?: InterlinkedContent;
+	Href?: string | undefined;
+	Equation?: Equation | undefined;
+	Mention?: Mention | undefined;
+	InternalHref?: InterlinkedContent | undefined;
 
 	// Footnote marker (set by extractFootnotes during build)
-	FootnoteRef?: string; // e.g., "ft_a" (without [^] wrapper)
-	IsFootnoteMarker?: boolean;
+	FootnoteRef?: string | undefined; // e.g., "ft_a" (without [^] wrapper)
+	IsFootnoteMarker?: boolean | undefined;
 
 	// Citation marker (set by extractCitations during build)
-	CitationRef?: string; // e.g., "smith2020" (citation key)
-	IsCitationMarker?: boolean;
+	CitationRef?: string | undefined; // e.g., "smith2020" (citation key)
+	IsCitationMarker?: boolean | undefined;
 }
 
 export interface Text {
 	Content: string;
-	Link?: Link;
+	Link?: Link | undefined;
 }
 
 export interface Emoji {
@@ -333,9 +365,9 @@ export interface SelectProperty {
  * Bio is the remaining text after shortcode extraction.
  */
 export interface AuthorProperty extends SelectProperty {
-	url?: string;
-	photo?: string;
-	bio?: string;
+	url?: string | undefined;
+	photo?: string | undefined;
+	bio?: string | undefined;
 }
 
 export interface LinkToPage {
@@ -345,8 +377,8 @@ export interface LinkToPage {
 
 export interface Mention {
 	Type: string;
-	Page?: InterlinkedContent;
-	DateStr?: string;
+	Page?: InterlinkedContent | undefined;
+	DateStr?: string | undefined;
 	LinkMention?: LinkMention | undefined;
 	CustomEmoji?: CustomEmojiMention | undefined;
 }
@@ -354,18 +386,18 @@ export interface Mention {
 export interface LinkMention {
 	Href: string;
 	Title: string;
-	IconUrl?: string;
-	Description?: string;
-	LinkAuthor?: string;
-	ThumbnailUrl?: string;
-	Height?: number;
-	IframeUrl?: string;
-	LinkProvider?: string;
+	IconUrl?: string | undefined;
+	Description?: string | undefined;
+	LinkAuthor?: string | undefined;
+	ThumbnailUrl?: string | undefined;
+	Height?: number | undefined;
+	IframeUrl?: string | undefined;
+	LinkProvider?: string | undefined;
 }
 
 export interface CustomEmojiMention {
 	Name: string;
-	Url?: string;
+	Url?: string | undefined;
 }
 
 export interface InterlinkedContent {
@@ -379,6 +411,7 @@ export type BlockTypes =
 	| "breadcrumb"
 	| "code"
 	| "bulleted_list_item"
+	| "bulleted_list"
 	| "callout"
 	| "child_database"
 	| "child_page"
@@ -391,10 +424,13 @@ export type BlockTypes =
 	| "heading_1"
 	| "heading_2"
 	| "heading_3"
+	| "heading_4"
 	| "image"
 	| "link_preview"
 	| "link_to_page"
+	| "mdx_snippet"
 	| "numbered_list_item"
+	| "numbered_list"
 	| "paragraph"
 	| "pdf"
 	| "quote"
@@ -402,8 +438,10 @@ export type BlockTypes =
 	| "table"
 	| "table_of_contents"
 	| "table_row"
+	| "tab"
 	| "template"
 	| "to_do"
+	| "to_do_list"
 	| "toggle"
 	| "video"
 	| "audio";
@@ -423,11 +461,13 @@ export interface Footnote {
 		Type: "rich_text" | "blocks" | "comment";
 		RichTexts?: RichText[];
 		Blocks?: Block[];
-		CommentAttachments?: CommentAttachment[];
+		CommentAttachments?: CommentAttachment[] | undefined;
 	};
 	SourceLocation: "content" | "caption" | "table" | "comment";
 	SourceBlockId?: string;
 	SourceBlock?: Block;
+	// Table-cell position, so the footnotes section previews just the cell not the whole table.
+	SourceTableCell?: { row: number; cell: number };
 }
 
 /**
@@ -437,7 +477,7 @@ export interface FootnoteContent {
 	Type: "rich_text" | "blocks" | "comment";
 	RichTexts?: RichText[]; // For end-of-block, inline-latex-footnote-command, and block-comments
 	Blocks?: Block[]; // For start-of-child-blocks
-	CommentAttachments?: CommentAttachment[]; // For images in comments
+	CommentAttachments?: CommentAttachment[] | undefined; // For images in comments
 }
 
 /**
@@ -511,11 +551,11 @@ export interface RichTextLocation {
  */
 export interface Citation {
 	Key: string; // e.g., "smith2020"
-	Index?: number; // Sequential index for IEEE style (1, 2, 3...)
+	Index?: number | undefined; // Sequential index for IEEE style (1, 2, 3...)
 	FormattedEntry: string; // HTML formatted bibliography entry (dynamically selected based on style)
 	Authors: string; // "Smith et al." or "Smith, J."
 	Year: string; // "2020"
-	Url?: string; // URL to the cited work
+	Url?: string | undefined; // URL to the cited work
 	SourceBlockIds: string[]; // ARRAY of all block IDs where this key appears
 	SourceBlocks?: Block[]; // ARRAY of actual Block objects where this key appears (like interlinked content)
 	FirstAppearanceIndex?: number; // Order of first occurrence in document

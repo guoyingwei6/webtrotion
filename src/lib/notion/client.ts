@@ -5,13 +5,12 @@ import sharp from "sharp";
 import retry from "async-retry";
 import ExifTransformer from "exif-be-gone";
 import pngToIco from "png-to-ico";
-import path from "path";
+import path from "node:path";
 import {
 	NOTION_API_SECRET,
 	DATABASE_ID,
 	DATA_SOURCE_ID,
 	MENU_PAGES_COLLECTION,
-	OPTIMIZE_IMAGES,
 	LAST_BUILD_TIME,
 	HIDE_UNDERSCORE_SLUGS_IN_LISTS,
 	BUILD_FOLDER_PATHS,
@@ -38,6 +37,7 @@ import type {
 	Heading1,
 	Heading2,
 	Heading3,
+	Heading4,
 	BulletedListItem,
 	NumberedListItem,
 	ToDo,
@@ -86,7 +86,7 @@ import superjson from "superjson";
 
 const client = new Client({
 	auth: NOTION_API_SECRET,
-	notionVersion: "2025-09-03",
+	notionVersion: "2026-03-11",
 });
 
 let resolvedDataSourceId: string | null = null;
@@ -100,40 +100,38 @@ const inFlightDownloads = new Map<string, Promise<void>>();
 let allEntriesCache: Post[] | null = null;
 let dsCache: Database | null = null;
 let blockIdPostIdMap: { [key: string]: string } | null = null;
-let allTagsWithCountsCache:
-	| { name: string; count: number; description: string; color: string }[]
-	| null = null;
+type WorkspaceCustomEmoji = {
+	id: string;
+	name: string;
+	url: string;
+};
 
-// Authors: Cache for authors with counts
+let workspaceCustomEmojiCacheById: Map<string, WorkspaceCustomEmoji> | null = null;
+let workspaceCustomEmojiCacheByName: Map<string, WorkspaceCustomEmoji> | null = null;
+let workspaceCustomEmojiPromise: Promise<void> | null = null;
+let allTagsWithCountsCache:
+	{ name: string; count: number; description: string; color: string }[] | null = null;
+
 let allAuthorsWithCountsCache:
 	| {
 			name: string;
 			count: number;
 			description: string;
 			color: string;
-			url?: string;
-			photo?: string;
-			bio?: string;
+			url?: string | undefined;
+			photo?: string | undefined;
+			bio?: string | undefined;
 	  }[]
 	| null = null;
 
-// Authors: Track if Authors property exists in database schema
 let authorsPropertyExistsCache: boolean | null = null;
 
-// Footnotes: Adjusted config (set once at module initialization, includes permission fallback)
 export let adjustedFootnotesConfig: any = null;
 
-// Footnotes: Track initialization promise to ensure it only runs once
 let initializationPromise: Promise<void> | null = null;
 
-// Citations: Module-level cache for BibTeX entries
-// Now loaded from cache created by citations-initializer integration
 let bibEntriesCache: Map<string, ParsedCitationEntry> | null = null;
 
-/**
- * Initialize footnotes config once at module load
- * This checks permissions and applies fallback if needed
- */
 async function initializeFootnotesConfig(): Promise<void> {
 	// Return existing promise if already initializing/initialized
 	if (initializationPromise) {
@@ -237,18 +235,53 @@ export function getBibEntriesCacheSnapshot(): Map<string, ParsedCitationEntry> {
 }
 
 const BUILDCACHE_DIR = BUILD_FOLDER_PATHS["buildcache"];
+const DEFAULT_NOTION_ICON_COLOR = "gray";
+const VALID_NOTION_ICON_COLORS = new Set([
+	"gray",
+	"lightgray",
+	"brown",
+	"yellow",
+	"orange",
+	"green",
+	"blue",
+	"purple",
+	"pink",
+	"red",
+]);
+
+const NOTION_CALENDAR_DATE_PREFIX_PATTERN = /^(\d{4}-\d{2}-\d{2})(?:T.*)?$/;
+
+function normalizeNotionCalendarDate(value?: string | null): string {
+	if (!value) return "";
+	const match = value.match(NOTION_CALENDAR_DATE_PREFIX_PATTERN);
+	return match?.[1] || "";
+}
+
+function normalizeNotionIconColor(color?: string): string {
+	if (color && VALID_NOTION_ICON_COLORS.has(color)) {
+		return color;
+	}
+
+	return DEFAULT_NOTION_ICON_COLOR;
+}
+
+export function buildNotionHostedIconUrl(name: string, color?: string): string {
+	const normalizedColor = normalizeNotionIconColor(color);
+	return `https://www.notion.com/icons/${encodeURIComponent(name)}_${normalizedColor}.svg`;
+}
+
 async function getResolvedDataSourceId(): Promise<string> {
 	// Initialize config once at module load
 	await initializeFootnotesConfig();
 	// Note: BibTeX cache is now initialized by citations-initializer integration at build:start
 
 	if (resolvedDataSourceId) {
-		return resolvedDataSourceId;
+		return resolvedDataSourceId!;
 	}
 
 	if (DATA_SOURCE_ID) {
 		resolvedDataSourceId = DATA_SOURCE_ID;
-		return resolvedDataSourceId;
+		return resolvedDataSourceId!;
 	}
 
 	if (!DATABASE_ID) {
@@ -287,9 +320,9 @@ async function getResolvedDataSourceId(): Promise<string> {
 		throw new Error(`No data sources found for database ID: ${DATABASE_ID}`);
 	}
 
-	resolvedDataSourceId = dataSources[0].id;
+	resolvedDataSourceId = dataSources[0]!.id;
 	console.log(`Using the first data source found: ${resolvedDataSourceId}`);
-	return resolvedDataSourceId;
+	return resolvedDataSourceId!;
 }
 
 // Generic function to save data to buildcache
@@ -620,7 +653,7 @@ function updateBlockIdPostIdMap(postId: string, blocks: Block[]) {
 	}
 
 	blocks.forEach((block) => {
-		blockIdPostIdMap[formatUUID(block.Id)] = formatUUID(postId);
+		if (blockIdPostIdMap) blockIdPostIdMap[formatUUID(block.Id)] = formatUUID(postId);
 	});
 
 	saveBuildcache("blockIdPostIdMap.json", blockIdPostIdMap);
@@ -656,7 +689,7 @@ export function createInterlinkedContentToThisEntry(
 						richText.InternalHref?.PageId &&
 						entryInterlinkedContentMap[richText.InternalHref.PageId]
 					) {
-						entryInterlinkedContentMap[richText.InternalHref.PageId].push({
+						entryInterlinkedContentMap[richText.InternalHref.PageId]?.push({
 							entryId: entryId,
 							block: interlinkedContent.block,
 						});
@@ -664,7 +697,7 @@ export function createInterlinkedContentToThisEntry(
 						richText.Mention?.Page?.PageId &&
 						entryInterlinkedContentMap[richText.Mention?.Page?.PageId]
 					) {
-						entryInterlinkedContentMap[richText.Mention.Page.PageId].push({
+						entryInterlinkedContentMap[richText.Mention.Page.PageId]?.push({
 							entryId: entryId,
 							block: interlinkedContent.block,
 						});
@@ -676,7 +709,7 @@ export function createInterlinkedContentToThisEntry(
 					interlinkedContent.link_to_pageid &&
 					entryInterlinkedContentMap[interlinkedContent.link_to_pageid]
 				) {
-					entryInterlinkedContentMap[interlinkedContent.link_to_pageid].push({
+					entryInterlinkedContentMap[interlinkedContent.link_to_pageid]?.push({
 						entryId: entryId,
 						block: interlinkedContent.block,
 					});
@@ -748,6 +781,7 @@ export async function getAllBlocksByBlockId(
 
 	for (let i = 0; i < allBlocks.length; i++) {
 		const block = allBlocks[i];
+		if (!block) continue;
 
 		if (block.Type === "table" && block.Table) {
 			block.Table.Rows = await _getTableRows(block.Id);
@@ -784,6 +818,12 @@ export async function getAllBlocksByBlockId(
 			);
 			block.Toggle.Children = children;
 			allFileBlocks.push(...childFileBlocks);
+		} else if (block.Type === "tab" && block.Tab && block.HasChildren) {
+			const { blocks: children, fileBlocks: childFileBlocks } = await getAllBlocksByBlockId(
+				block.Id,
+			);
+			block.Tab.Children = children;
+			allFileBlocks.push(...childFileBlocks);
 		} else if (block.Type === "paragraph" && block.Paragraph && block.HasChildren) {
 			const { blocks: children, fileBlocks: childFileBlocks } = await getAllBlocksByBlockId(
 				block.Id,
@@ -807,6 +847,12 @@ export async function getAllBlocksByBlockId(
 				block.Id,
 			);
 			block.Heading3.Children = children;
+			allFileBlocks.push(...childFileBlocks);
+		} else if (block.Type === "heading_4" && block.Heading4 && block.HasChildren) {
+			const { blocks: children, fileBlocks: childFileBlocks } = await getAllBlocksByBlockId(
+				block.Id,
+			);
+			block.Heading4.Children = children;
 			allFileBlocks.push(...childFileBlocks);
 		} else if (block.Type === "quote" && block.Quote && block.HasChildren) {
 			const { blocks: children, fileBlocks: childFileBlocks } = await getAllBlocksByBlockId(
@@ -1013,12 +1059,13 @@ export async function getAllTagsWithCounts(): Promise<
 	filteredPosts.forEach((post) => {
 		post.Tags.forEach((tag) => {
 			const tagName = tag.name;
-			if (tagCounts[tag.name]) {
-				tagCounts[tag.name].count++;
+			const existingTag = tagCounts[tag.name];
+			if (existingTag) {
+				existingTag.count++;
 			} else {
 				tagCounts[tagName] = {
 					count: 1,
-					description: tagsNameWDesc[tag.name] ? tagsNameWDesc[tag.name] : "",
+					description: tagsNameWDesc[tag.name] || "",
 					color: tag.color,
 				};
 			}
@@ -1049,9 +1096,9 @@ export async function getAllTagsWithCounts(): Promise<
  * Remaining text after extraction = bio
  */
 export function parseAuthorDescription(description: string): {
-	url?: string;
-	photo?: string;
-	bio?: string;
+	url?: string | undefined;
+	photo?: string | undefined;
+	bio?: string | undefined;
 } {
 	if (!description) {
 		return {};
@@ -1070,7 +1117,7 @@ export function parseAuthorDescription(description: string): {
 	const urlRegex = new RegExp(`${urlStart}(.+?)${urlEnd}`);
 	const urlMatch = remaining.match(urlRegex);
 	if (urlMatch) {
-		url = urlMatch[1].trim();
+		url = urlMatch[1]?.trim();
 		remaining = remaining.replace(urlMatch[0], "");
 	}
 
@@ -1080,7 +1127,7 @@ export function parseAuthorDescription(description: string): {
 	const photoRegex = new RegExp(`${photoStart}(.+?)${photoEnd}`);
 	const photoMatch = remaining.match(photoRegex);
 	if (photoMatch) {
-		photo = photoMatch[1].trim();
+		photo = photoMatch[1]?.trim();
 		remaining = remaining.replace(photoMatch[0], "");
 	}
 
@@ -1161,9 +1208,9 @@ export async function getAllAuthorsWithCounts(): Promise<
 		count: number;
 		description: string;
 		color: string;
-		url?: string;
-		photo?: string;
-		bio?: string;
+		url?: string | undefined;
+		photo?: string | undefined;
+		bio?: string | undefined;
 	}[]
 > {
 	if (allAuthorsWithCountsCache) {
@@ -1208,9 +1255,9 @@ export async function getAllAuthorsWithCounts(): Promise<
 			count: number;
 			description: string;
 			color: string;
-			url?: string;
-			photo?: string;
-			bio?: string;
+			url?: string | undefined;
+			photo?: string | undefined;
+			bio?: string | undefined;
 		}
 	> = {};
 
@@ -1312,14 +1359,14 @@ export function generateFilePath(url: URL, isImageForAstro: boolean = false) {
 		}
 	}
 
-	const dir = path.join(BASE_DIR, dirName);
+	const dir = path.join(BASE_DIR, dirName || "");
 
 	if (!fs.existsSync(dir)) {
 		fs.mkdirSync(dir, { recursive: true });
 	}
 
 	// Get the file name and decode it
-	let filename = decodeURIComponent(segments.slice(-1)[0]);
+	let filename = decodeURIComponent(segments.slice(-1)[0] || "");
 
 	if (url.hostname.includes("unsplash") && url.searchParams.has("fm")) {
 		const ext = url.searchParams.get("fm");
@@ -1421,7 +1468,7 @@ export async function downloadFile(
 			}
 			resolve();
 		});
-		stream.on("error", function (err) {
+		stream.on("error", function (err: Error) {
 			console.error("Error reading stream:", err);
 			resolve();
 		});
@@ -1472,7 +1519,9 @@ async function ensureDownloaded(url: URL, isImageForAstro: boolean): Promise<voi
 export async function processFileBlocks(fileAttachedBlocks: Block[]) {
 	await Promise.all(
 		fileAttachedBlocks.map(async (block) => {
-			const fileDetails = (block.NImage || block.File || block.Video || block.NAudio).File;
+			const mediaBlock = block.NImage || block.File || block.Video || block.NAudio;
+			const fileDetails = mediaBlock?.File;
+			if (!fileDetails?.Url) return null;
 			const expiryTime = fileDetails.ExpiryTime;
 			let url = new URL(fileDetails.Url);
 
@@ -1486,20 +1535,17 @@ export async function processFileBlocks(fileAttachedBlocks: Block[]) {
 				: true;
 
 			if (shouldDownload) {
-				if (Date.parse(expiryTime) < Date.now()) {
+				if (expiryTime && Date.parse(expiryTime) < Date.now()) {
 					// If the file is expired, get the block again and extract the new URL
 					const updatedBlock = await getBlock(block.Id, true, true); // skipFileDownload = true to avoid circular call
 					if (!updatedBlock) {
 						return null;
 					}
-					url = new URL(
-						(
-							updatedBlock.NImage ||
-							updatedBlock.File ||
-							updatedBlock.Video ||
-							updatedBlock.NAudio
-						).File.Url,
-					);
+					const updatedMediaBlock =
+						updatedBlock.NImage || updatedBlock.File || updatedBlock.Video || updatedBlock.NAudio;
+					const updatedUrl = updatedMediaBlock?.File?.Url;
+					if (!updatedUrl) return null;
+					url = new URL(updatedUrl);
 				}
 
 				return downloadFile(url, isImage); // Download the file
@@ -1515,11 +1561,175 @@ export function isNotionHostedIconUrl(rawUrl: string): boolean {
 
 	try {
 		const url = new URL(rawUrl);
-		const isNotionHost = url.hostname === "www.notion.so" || url.hostname === "notion.so";
+		const isNotionHost =
+			url.hostname === "www.notion.so" ||
+			url.hostname === "notion.so" ||
+			url.hostname === "www.notion.com" ||
+			url.hostname === "notion.com";
 		return isNotionHost && url.pathname.startsWith("/icons/") && url.pathname.endsWith(".svg");
 	} catch {
 		return false;
 	}
+}
+
+async function ensureWorkspaceCustomEmojiCache(): Promise<void> {
+	if (workspaceCustomEmojiCacheById && workspaceCustomEmojiCacheByName) {
+		return;
+	}
+
+	if (workspaceCustomEmojiPromise) {
+		return workspaceCustomEmojiPromise;
+	}
+
+	workspaceCustomEmojiPromise = (async () => {
+		const cacheFileName = "workspaceCustomEmojis.json";
+		let emojis = loadBuildcache<WorkspaceCustomEmoji[]>(cacheFileName);
+
+		if (!emojis) {
+			emojis = [];
+			let startCursor: string | undefined;
+
+			do {
+				const response = await client.customEmojis.list({
+					page_size: 100,
+					...(startCursor ? { start_cursor: startCursor } : {}),
+				});
+
+				emojis.push(...response.results);
+				startCursor = response.has_more ? (response.next_cursor ?? undefined) : undefined;
+			} while (startCursor);
+
+			saveBuildcache(cacheFileName, emojis);
+		}
+
+		workspaceCustomEmojiCacheById = new Map(emojis.map((emoji) => [emoji.id, emoji]));
+		workspaceCustomEmojiCacheByName = new Map(emojis.map((emoji) => [emoji.name, emoji]));
+	})().finally(() => {
+		workspaceCustomEmojiPromise = null;
+	});
+
+	return workspaceCustomEmojiPromise;
+}
+
+async function resolveCustomEmojiUrl(customEmoji?: {
+	id?: string;
+	name?: string;
+	url?: string;
+}): Promise<string> {
+	if (customEmoji?.url) {
+		return customEmoji.url;
+	}
+
+	if (!customEmoji?.id && !customEmoji?.name) {
+		return "";
+	}
+
+	await ensureWorkspaceCustomEmojiCache();
+
+	if (customEmoji.id && workspaceCustomEmojiCacheById?.has(customEmoji.id)) {
+		return workspaceCustomEmojiCacheById.get(customEmoji.id)?.url || "";
+	}
+
+	if (customEmoji.name && workspaceCustomEmojiCacheByName?.has(customEmoji.name)) {
+		return workspaceCustomEmojiCacheByName.get(customEmoji.name)?.url || "";
+	}
+
+	return "";
+}
+
+async function ensureIconDownloaded(urlString: string, context: string): Promise<void> {
+	if (!urlString) return;
+
+	try {
+		const url = new URL(urlString);
+		const isImage = isImageTypeForAstro(url.pathname);
+		await ensureDownloaded(url, isImage);
+	} catch (err) {
+		console.log(`Error downloading ${context}: ${err}`);
+	}
+}
+
+async function buildIconObject(
+	iconResponse:
+		| responses.DatabaseObject["icon"]
+		| responses.PageObject["icon"]
+		| NonNullable<responses.BlockObject["callout"]>["icon"]
+		| null
+		| undefined,
+	context: string,
+): Promise<FileObject | Emoji | null> {
+	if (!iconResponse) {
+		return null;
+	}
+
+	if (iconResponse.type === "emoji" && "emoji" in iconResponse) {
+		return {
+			Type: iconResponse.type,
+			Emoji: iconResponse.emoji,
+		};
+	}
+
+	if (iconResponse.type === "icon" && "icon" in iconResponse) {
+		const name = iconResponse.icon?.name || "";
+		const color = normalizeNotionIconColor(iconResponse.icon?.color);
+		const iconUrl = name ? buildNotionHostedIconUrl(name, color) : "";
+
+		if (iconUrl) {
+			await ensureIconDownloaded(iconUrl, context);
+		}
+
+		return {
+			Type: iconResponse.type,
+			Url: iconUrl,
+			Name: name,
+			...(color ? { Color: color as NonNullable<FileObject["Color"]> } : {}),
+		};
+	}
+
+	if (iconResponse.type === "external" && "external" in iconResponse) {
+		const iconUrl = iconResponse.external?.url || "";
+
+		if (iconUrl && isNotionHostedIconUrl(iconUrl)) {
+			await ensureIconDownloaded(iconUrl, context);
+		}
+
+		return {
+			Type: iconResponse.type,
+			Url: iconUrl,
+		};
+	}
+
+	if (iconResponse.type === "file" && "file" in iconResponse) {
+		const iconUrl = iconResponse.file?.url || "";
+
+		if (iconUrl) {
+			await ensureIconDownloaded(iconUrl, context);
+		}
+
+		return {
+			Type: iconResponse.type,
+			Url: iconUrl,
+			ExpiryTime: iconResponse.file?.expiry_time,
+		};
+	}
+
+	if (iconResponse.type === "custom_emoji" && "custom_emoji" in iconResponse) {
+		const customEmoji = iconResponse.custom_emoji as { id?: string; name?: string; url?: string };
+		const resolvedUrl = await resolveCustomEmojiUrl(customEmoji);
+
+		if (resolvedUrl) {
+			await ensureIconDownloaded(resolvedUrl, context);
+		}
+
+		return {
+			Type: iconResponse.type,
+			Url: resolvedUrl,
+			...(customEmoji.id ? { Id: customEmoji.id } : {}),
+			...(customEmoji.name ? { Name: customEmoji.name } : {}),
+		};
+	}
+
+	return null;
 }
 
 export async function getDataSource(): Promise<Database> {
@@ -1561,38 +1771,7 @@ export async function getDataSource(): Promise<Database> {
 		},
 	);
 
-	let icon: FileObject | Emoji | null = null;
-	if (res.icon) {
-		if (res.icon.type === "emoji" && "emoji" in res.icon) {
-			icon = {
-				Type: res.icon.type,
-				Emoji: res.icon.emoji,
-			};
-		} else if (res.icon.type === "external" && "external" in res.icon) {
-			const iconUrl = res.icon.external?.url || "";
-
-			// Notion's built-in icon set comes back as `external`, but we still want to cache it locally.
-			if (iconUrl && isNotionHostedIconUrl(iconUrl)) {
-				try {
-					const url = new URL(iconUrl);
-					const isImage = isImageTypeForAstro(url.pathname);
-					await ensureDownloaded(url, isImage);
-				} catch (err) {
-					console.log(`Error downloading database icon: ${err}`);
-				}
-			}
-
-			icon = {
-				Type: res.icon.type,
-				Url: iconUrl,
-			};
-		} else if (res.icon.type === "file" && "file" in res.icon) {
-			icon = {
-				Type: res.icon.type,
-				Url: res.icon.file?.url || "",
-			};
-		}
-	}
+	const icon = await buildIconObject(res.icon, "database icon");
 
 	let cover: FileObject | null = null;
 	if (res.cover) {
@@ -1614,6 +1793,33 @@ export async function getDataSource(): Promise<Database> {
 	dsCache = database;
 	saveBuildcache(cacheFileName, dsCache);
 	return database;
+}
+
+function getHtmlMetaContent(html: string, name: string): string | undefined {
+	const metaTags = html.match(/<meta\b[^>]*>/gi) || [];
+	for (const tag of metaTags) {
+		const attributes = Object.fromEntries(
+			Array.from(tag.matchAll(/([\w:-]+)\s*=\s*(["'])(.*?)\2/g), (match) => [
+				match[1]?.toLowerCase() ?? "",
+				match[3],
+			]),
+		);
+		if (attributes.name?.toLowerCase() === name.toLowerCase()) return attributes.content;
+	}
+	return undefined;
+}
+
+function getHtmlIframeSizing(html: string): Code["IframeSizing"] {
+	const heightValue = getHtmlMetaContent(html, "webtrotion:height");
+	const aspectRatioValue = getHtmlMetaContent(html, "webtrotion:aspect-ratio");
+	const height = heightValue ? Number.parseInt(heightValue, 10) : undefined;
+	const aspectRatio = aspectRatioValue?.match(/^\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?$/)
+		? aspectRatioValue.replaceAll(" ", "")
+		: undefined;
+
+	if (height && height > 0) return { Height: height };
+	if (aspectRatio) return { AspectRatio: aspectRatio };
+	return undefined;
 }
 
 async function _buildBlock(blockObject: responses.BlockObject, pageId?: string): Promise<Block> {
@@ -1662,6 +1868,16 @@ async function _buildBlock(blockObject: responses.BlockObject, pageId?: string):
 					IsToggleable: blockObject.heading_3.is_toggleable,
 				};
 				block.Heading3 = heading3;
+			}
+			break;
+		case "heading_4":
+			if (blockObject.heading_4) {
+				const heading4: Heading4 = {
+					RichTexts: await Promise.all(blockObject.heading_4.rich_text.map(_buildRichText)),
+					Color: blockObject.heading_4.color,
+					IsToggleable: blockObject.heading_4.is_toggleable,
+				};
+				block.Heading4 = heading4;
 			}
 			break;
 		case "bulleted_list_item":
@@ -1828,85 +2044,7 @@ async function _buildBlock(blockObject: responses.BlockObject, pageId?: string):
 			break;
 		case "callout":
 			if (blockObject.callout) {
-				let icon: FileObject | Emoji | null = null;
-				if (blockObject.callout.icon) {
-					if (blockObject.callout.icon.type === "emoji" && "emoji" in blockObject.callout.icon) {
-						icon = {
-							Type: blockObject.callout.icon.type,
-							Emoji: blockObject.callout.icon.emoji,
-						};
-					} else if (
-						blockObject.callout.icon.type === "external" &&
-						"external" in blockObject.callout.icon
-					) {
-						const iconUrl = blockObject.callout.icon.external?.url || "";
-
-						icon = {
-							Type: blockObject.callout.icon.type,
-							Url: iconUrl,
-						};
-
-						// Notion's built-in icon set comes back as `external`, but we still want to cache it locally.
-						if (iconUrl && isNotionHostedIconUrl(iconUrl)) {
-							try {
-								const url = new URL(iconUrl);
-								const isImage = isImageTypeForAstro(url.pathname);
-								await ensureDownloaded(url, isImage);
-							} catch (err) {
-								console.log(`Error downloading callout icon: ${err}`);
-							}
-						}
-					} else if (
-						blockObject.callout.icon.type === "file" &&
-						"file" in blockObject.callout.icon
-					) {
-						const iconUrl = blockObject.callout.icon.file?.url || "";
-
-						icon = {
-							Type: blockObject.callout.icon.type,
-							Url: iconUrl,
-							ExpiryTime: blockObject.callout.icon.file?.expiry_time,
-						};
-
-						// Download icon if it doesn't exist
-						if (iconUrl) {
-							try {
-								const url = new URL(iconUrl);
-								const isImage = isImageTypeForAstro(url.pathname);
-								const filepath = generateFilePath(url, isImage);
-								if (!fs.existsSync(filepath)) {
-									await downloadFile(url, isImage);
-								}
-							} catch (err) {
-								console.log(`Error downloading callout icon: ${err}`);
-							}
-						}
-					} else if (
-						blockObject.callout.icon.type === "custom_emoji" &&
-						"custom_emoji" in blockObject.callout.icon
-					) {
-						const emojiUrl = blockObject.callout.icon.custom_emoji?.url || "";
-
-						icon = {
-							Type: blockObject.callout.icon.type,
-							Url: emojiUrl,
-						};
-
-						// Download custom emoji if it doesn't exist
-						if (emojiUrl) {
-							try {
-								const url = new URL(emojiUrl);
-								const isImage = isImageTypeForAstro(url.pathname);
-								const filepath = generateFilePath(url, isImage);
-								if (!fs.existsSync(filepath)) {
-									await downloadFile(url, isImage);
-								}
-							} catch (err) {
-								console.log(`Error downloading callout custom emoji: ${err}`);
-							}
-						}
-					}
-				}
+				const icon = await buildIconObject(blockObject.callout.icon, "callout icon");
 
 				const callout: Callout = {
 					RichTexts: await Promise.all(blockObject.callout.rich_text.map(_buildRichText)),
@@ -1931,6 +2069,11 @@ async function _buildBlock(blockObject: responses.BlockObject, pageId?: string):
 				block.SyncedBlock = syncedBlock;
 			}
 			break;
+		case "tab":
+			block.Tab = {
+				Children: [],
+			};
+			break;
 		case "toggle":
 			if (blockObject.toggle) {
 				const toggle: Toggle = {
@@ -1943,11 +2086,57 @@ async function _buildBlock(blockObject: responses.BlockObject, pageId?: string):
 			break;
 		case "embed":
 			if (blockObject.embed) {
-				const embed: Embed = {
-					Caption: await Promise.all(blockObject.embed.caption?.map(_buildRichText) || []),
-					Url: blockObject.embed.url,
-				};
-				block.Embed = embed;
+				const embedUrl = new URL(blockObject.embed.url);
+				const isNotionHtmlArtifact =
+					embedUrl.hostname === "prod-files-secure.s3.us-west-2.amazonaws.com" &&
+					[".html", ".htm"].includes(path.extname(embedUrl.pathname).toLowerCase()) &&
+					embedUrl.searchParams.has("X-Amz-Signature");
+
+				if (isNotionHtmlArtifact) {
+					const response = await fetch(embedUrl);
+					if (!response.ok) {
+						throw new Error(
+							`Failed to fetch Notion HTML artifact ${blockObject.id}: ${response.status} ${response.statusText}`,
+						);
+					}
+
+					const contentType = response.headers.get("content-type") || "";
+					if (!contentType.toLowerCase().startsWith("text/html")) {
+						throw new Error(
+							`Notion HTML artifact ${blockObject.id} returned unexpected content type: ${contentType || "missing"}`,
+						);
+					}
+
+					const html = await response.text();
+					const iframeSizing = getHtmlIframeSizing(html);
+					block.Type = "code";
+					block.Code = {
+						Caption: await Promise.all(blockObject.embed.caption?.map(_buildRichText) || []),
+						RichTexts: [
+							{
+								Text: { Content: html },
+								Annotation: {
+									Bold: false,
+									Italic: false,
+									Strikethrough: false,
+									Underline: false,
+									Code: false,
+									Color: "default",
+								},
+								PlainText: html,
+							},
+						],
+						Language: "html",
+						RenderMode: "iframe",
+						...(iframeSizing ? { IframeSizing: iframeSizing } : {}),
+					};
+				} else {
+					const embed: Embed = {
+						Caption: await Promise.all(blockObject.embed.caption?.map(_buildRichText) || []),
+						Url: blockObject.embed.url,
+					};
+					block.Embed = embed;
+				}
 			}
 			break;
 		case "bookmark":
@@ -2157,82 +2346,13 @@ async function _getSyncedBlockChildren(
 
 function _validPageObject(pageObject: responses.PageObject): boolean {
 	const prop = pageObject.properties;
-	return !!prop.Page.title && prop.Page.title.length > 0;
+	return !!prop.Page?.title && prop.Page.title.length > 0;
 }
 
 async function _buildPost(pageObject: responses.PageObject): Promise<Post> {
 	const prop = pageObject.properties;
 
-	let icon: FileObject | Emoji | null = null;
-	if (pageObject.icon) {
-		if (pageObject.icon.type === "emoji" && "emoji" in pageObject.icon) {
-			icon = {
-				Type: pageObject.icon.type,
-				Emoji: pageObject.icon.emoji,
-			};
-		} else if (pageObject.icon.type === "external" && "external" in pageObject.icon) {
-			const iconUrl = pageObject.icon.external?.url || "";
-
-			icon = {
-				Type: pageObject.icon.type,
-				Url: iconUrl,
-			};
-
-			// Notion's built-in icon set comes back as `external`, but we still want to cache it locally.
-			if (iconUrl && isNotionHostedIconUrl(iconUrl)) {
-				try {
-					const url = new URL(iconUrl);
-					const isImage = isImageTypeForAstro(url.pathname);
-					await ensureDownloaded(url, isImage);
-				} catch (err) {
-					console.log(`Error downloading page icon: ${err}`);
-				}
-			}
-		} else if (pageObject.icon.type === "file" && "file" in pageObject.icon) {
-			const iconUrl = pageObject.icon.file?.url || "";
-
-			icon = {
-				Type: pageObject.icon.type,
-				Url: iconUrl,
-				ExpiryTime: pageObject.icon.file?.expiry_time,
-			};
-
-			// Download icon if it doesn't exist
-			if (iconUrl) {
-				try {
-					const url = new URL(iconUrl);
-					const isImage = isImageTypeForAstro(url.pathname);
-					const filepath = generateFilePath(url, isImage);
-					if (!fs.existsSync(filepath)) {
-						await downloadFile(url, isImage);
-					}
-				} catch (err) {
-					console.log(`Error downloading page icon: ${err}`);
-				}
-			}
-		} else if (pageObject.icon.type === "custom_emoji" && "custom_emoji" in pageObject.icon) {
-			const emojiUrl = pageObject.icon.custom_emoji?.url || "";
-
-			icon = {
-				Type: pageObject.icon.type,
-				Url: emojiUrl,
-			};
-
-			// Download custom emoji if it doesn't exist
-			if (emojiUrl) {
-				try {
-					const url = new URL(emojiUrl);
-					const isImage = isImageTypeForAstro(url.pathname);
-					const filepath = generateFilePath(url, isImage);
-					if (!fs.existsSync(filepath)) {
-						await downloadFile(url, isImage);
-					}
-				} catch (err) {
-					console.log(`Error downloading page custom emoji: ${err}`);
-				}
-			}
-		}
-	}
+	const icon = await buildIconObject(pageObject.icon, "page icon");
 
 	let cover: FileObject | null = null;
 	if (pageObject.cover) {
@@ -2243,19 +2363,18 @@ async function _buildPost(pageObject: responses.PageObject): Promise<Post> {
 	}
 
 	let featuredImage: FileObject | null = null;
-	if (prop.FeaturedImage.files && prop.FeaturedImage.files.length > 0) {
-		if (prop.FeaturedImage.files[0].external) {
-			featuredImage = {
-				Type: prop.FeaturedImage.type,
-				Url: prop.FeaturedImage.files[0].external.url,
-			};
-		} else if (prop.FeaturedImage.files[0].file) {
-			featuredImage = {
-				Type: prop.FeaturedImage.type,
-				Url: prop.FeaturedImage.files[0].file.url,
-				ExpiryTime: prop.FeaturedImage.files[0].file.expiry_time,
-			};
-		}
+	const featuredImageFile = prop.FeaturedImage?.files?.[0];
+	if (featuredImageFile?.external) {
+		featuredImage = {
+			Type: prop.FeaturedImage?.type || "file",
+			Url: featuredImageFile.external.url,
+		};
+	} else if (featuredImageFile?.file) {
+		featuredImage = {
+			Type: prop.FeaturedImage?.type || "file",
+			Url: featuredImageFile.file.url,
+			ExpiryTime: featuredImageFile.file.expiry_time,
+		};
 	}
 
 	const externalUrl =
@@ -2312,14 +2431,12 @@ async function _buildPost(pageObject: responses.PageObject): Promise<Post> {
 	const post: Post = {
 		PageId: pageObject.id,
 		Title: prop.Page?.title ? prop.Page.title.map((richText) => richText.plain_text).join("") : "",
-		LastUpdatedTimeStamp: pageObject.last_edited_time
-			? new Date(pageObject.last_edited_time)
-			: null,
+		LastUpdatedTimeStamp: new Date(pageObject.last_edited_time),
 		Icon: icon,
 		Cover: cover,
 		Collection: prop.Collection?.select ? prop.Collection.select.name : "",
 		Slug: slugValue,
-		Date: prop["Publish Date"]?.formula?.date ? prop["Publish Date"]?.formula?.date.start : "",
+		Date: normalizeNotionCalendarDate(prop["Publish Date"]?.formula?.date?.start),
 		Tags: prop.Tags?.multi_select ? prop.Tags.multi_select : [],
 		Excerpt:
 			prop.Excerpt?.rich_text && prop.Excerpt.rich_text.length > 0
@@ -2327,9 +2444,7 @@ async function _buildPost(pageObject: responses.PageObject): Promise<Post> {
 				: "",
 		FeaturedImage: featuredImage,
 		Rank: prop.Rank?.number ?? null,
-		LastUpdatedDate: prop["Last Updated Date"]?.formula?.date
-			? prop["Last Updated Date"]?.formula.date.start
-			: "",
+		LastUpdatedDate: normalizeNotionCalendarDate(prop["Last Updated Date"]?.formula?.date?.start),
 		Pinned: prop.Pinned && prop.Pinned.checkbox === true ? true : false,
 		BlueSkyPostLink:
 			prop["Bluesky Post Link"] && prop["Bluesky Post Link"].url
@@ -2363,21 +2478,26 @@ export async function _buildRichText(richTextObject: responses.RichTextObject): 
 		// Notion adds a `v=` query parameter to links copied from peek view.
 		// We need to remove it to parse the link correctly.
 		richTextObject.href = richTextObject.href.replace(/([&?])v=[^#]*/, "");
-		if (richTextObject.href?.includes("#")) {
+		const [pagePart = "", blockPart] = richTextObject.href.split("#");
+		// The Notion page id is the last 32-hex-character run in the path. Matching
+		// it this way tolerates every internal-link shape Notion emits: the legacy
+		// `/<id>`, the newer `/p/<id>` (peek / "copy link"), and the full
+		// `/<workspace>/<Page-Title>-<id>` form. Previously we only stripped the
+		// leading `/`, so a `/p/<id>` link produced a mangled page id and the
+		// link (and its hover popover) silently disappeared.
+		const pageIdMatches = pagePart.replace(/-/g, "").match(/[0-9a-fA-F]{32}/g);
+		const rawPageId = pageIdMatches?.[pageIdMatches.length - 1] || pagePart.substring(1);
+		const pageId = rawPageId.replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, "$1-$2-$3-$4-$5");
+		if (blockPart) {
 			const interlinkedContent: InterlinkedContent = {
-				PageId: richTextObject.href
-					.split("#")[0]
-					.substring(1)
-					.replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, "$1-$2-$3-$4-$5"),
-				BlockId: richTextObject.href.split("#")[1],
+				PageId: pageId,
+				BlockId: blockPart,
 				Type: "block",
 			};
 			richText.InternalHref = interlinkedContent;
 		} else {
 			const interlinkedContent: InterlinkedContent = {
-				PageId: richTextObject.href
-					.substring(1)
-					.replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, "$1-$2-$3-$4-$5"),
+				PageId: pageId,
 				Type: "page",
 			};
 			richText.InternalHref = interlinkedContent;
@@ -2442,25 +2562,15 @@ export async function _buildRichText(richTextObject: responses.RichTextObject): 
 			richTextObject.mention.type === "custom_emoji" &&
 			richTextObject.mention.custom_emoji
 		) {
-			const emojiUrl = richTextObject.mention.custom_emoji.url || "";
+			const emojiUrl = await resolveCustomEmojiUrl(richTextObject.mention.custom_emoji);
 
 			mention.CustomEmoji = {
 				Name: richTextObject.mention.custom_emoji.name,
 				Url: emojiUrl,
 			};
 
-			// Download custom emoji if it doesn't exist
 			if (emojiUrl) {
-				try {
-					const url = new URL(emojiUrl);
-					const isImage = isImageTypeForAstro(url.pathname);
-					const filepath = generateFilePath(url, isImage);
-					if (!fs.existsSync(filepath)) {
-						await downloadFile(url, isImage);
-					}
-				} catch (err) {
-					console.log(`Error downloading custom emoji: ${err}`);
-				}
+				await ensureIconDownloaded(emojiUrl, "custom emoji");
 			}
 		}
 

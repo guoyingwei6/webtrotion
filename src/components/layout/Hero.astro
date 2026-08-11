@@ -47,7 +47,7 @@ if (showHeroBackground && post.Cover?.Url) {
 				const tiny = await getImage({
 					src: downloadedImage,
 					format: getImageComponentFormat(downloadedImage),
-					quality: 5,
+					quality: 3,
 					width: downloadedImage.width > 2100 ? 2100 : downloadedImage.width,
 				});
 				coverPlaceholderUrl = tiny?.src || coverImageUrl;
@@ -88,7 +88,7 @@ if (showHeroBackground && post.Cover?.Url) {
 	{post.Authors !== undefined && <AuthorByline authors={post.Authors} class="mb-2" />}
 	<div class="flex max-w-full flex-wrap items-center gap-x-3 gap-y-2">
 		<p class="font-semibold">
-			<FormattedDate date={new Date(post.Date)} dateTimeOptions={dateTimeOptions} />
+			<FormattedDate date={post.Date} dateTimeOptions={dateTimeOptions} />
 		</p>
 		{
 			post.Date && post.LastUpdatedDate && areDifferentDates(post.Date, post.LastUpdatedDate) && (
@@ -96,7 +96,7 @@ if (showHeroBackground && post.Cover?.Url) {
 					{"Last Updated:"}
 					<FormattedDate
 						class="ms-1"
-						date={new Date(post.LastUpdatedDate)}
+						date={post.LastUpdatedDate}
 						dateTimeOptions={dateTimeOptions}
 					/>
 				</span>
@@ -112,7 +112,7 @@ if (showHeroBackground && post.Cover?.Url) {
 					aria-hidden="true"
 					focusable="false"
 				/>
-				{post.Tags.map((tag, i) => (
+				{post.Tags.map((tag) => (
 					<>
 						<a
 							class={`mt-1 inline-block rounded-lg px-2 ${getNotionColorToTailwindColor(

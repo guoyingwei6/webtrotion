@@ -1,62 +1,93 @@
-/**
- * RichText Utilities
- *
- * Shared utility functions for manipulating Notion RichText objects.
- * These functions are used across footnotes, citations, and content extraction.
- *
- * Key principles:
- * - Preserve ALL formatting (bold, italic, colors, etc.)
- * - Perform safe splitting and cloning
- * - Optimize for performance (minimal allocations)
- */
-
 import type { Block, RichText, RichTextLocation } from "../lib/interfaces";
-
-// ============================================================================
-// Text Extraction Utilities
-// ============================================================================
-
-// Joins plain text from RichText array without adding separators
-// Spaces are already included in each RichText.PlainText from Notion
 export function joinPlainText(richTexts: RichText[]): string {
 	return richTexts.map((rt) => rt.PlainText).join("");
 }
 
-// ============================================================================
-// RichText Cloning
-// ============================================================================
+// Strips a leading shortcode marker from a RichText array in place (may span
+// multiple segments) and returns whether one was found.
+export function extractLeadingMarker(
+	richTexts: RichText[] | undefined | null,
+	marker: string | undefined | null,
+): boolean {
+	if (!richTexts || richTexts.length === 0 || !marker) return false;
+	const joined = joinPlainText(richTexts);
+	const leadingWs = joined.length - joined.trimStart().length;
+	if (!joined.slice(leadingWs).startsWith(marker)) return false;
+
+	let remaining = leadingWs + marker.length;
+	for (const rt of richTexts) {
+		if (remaining <= 0) break;
+		const pt = rt.PlainText ?? "";
+		const take = Math.min(remaining, pt.length);
+		rt.PlainText = pt.slice(take);
+		if (rt.Text && typeof rt.Text.Content === "string") {
+			rt.Text.Content = rt.Text.Content.slice(take);
+		}
+		remaining -= take;
+	}
+
+	// Drop a single leading space left behind on the first non-empty segment.
+	for (const rt of richTexts) {
+		if (rt.PlainText && rt.PlainText.length) {
+			rt.PlainText = rt.PlainText.replace(/^\s+/, "");
+			if (rt.Text && typeof rt.Text.Content === "string") {
+				rt.Text.Content = rt.Text.Content.replace(/^\s+/, "");
+			}
+			break;
+		}
+	}
+	return true;
+}
+
+// Caches the marker result on `owner` so repeated renders of the same shared
+// block (main + popover + clones) agree despite the in-place strip.
+export function resolveLeadingMarker(
+	owner: any,
+	richTexts: RichText[] | undefined | null,
+	marker: string | undefined | null,
+	cacheKey: string,
+): boolean {
+	if (owner && typeof owner[cacheKey] === "boolean") {
+		return owner[cacheKey] as boolean;
+	}
+	const result = extractLeadingMarker(richTexts, marker);
+	if (owner) owner[cacheKey] = result;
+	return result;
+}
 
 /**
  * Deep clones a RichText object, preserving all annotation properties
  * CRITICAL: Must preserve Bold, Italic, Color, Code, etc.
  */
 export function cloneRichText(richText: RichText): RichText {
+	const text = richText.Text
+		? {
+				...richText.Text,
+				...(richText.Text.Link ? { Link: { ...richText.Text.Link } } : {}),
+			}
+		: undefined;
+	const mention = richText.Mention
+		? {
+				...richText.Mention,
+				...(richText.Mention.Page ? { Page: { ...richText.Mention.Page } } : {}),
+				...(richText.Mention.LinkMention
+					? { LinkMention: { ...richText.Mention.LinkMention } }
+					: {}),
+				...(richText.Mention.CustomEmoji
+					? { CustomEmoji: { ...richText.Mention.CustomEmoji } }
+					: {}),
+			}
+		: undefined;
+
 	return {
 		...richText,
-		Text: richText.Text
-			? { ...richText.Text, Link: richText.Text.Link ? { ...richText.Text.Link } : undefined }
-			: undefined,
 		Annotation: { ...richText.Annotation },
-		Equation: richText.Equation ? { ...richText.Equation } : undefined,
-		Mention: richText.Mention
-			? {
-					...richText.Mention,
-					Page: richText.Mention.Page ? { ...richText.Mention.Page } : undefined,
-					LinkMention: richText.Mention.LinkMention
-						? { ...richText.Mention.LinkMention }
-						: undefined,
-					CustomEmoji: richText.Mention.CustomEmoji
-						? { ...richText.Mention.CustomEmoji }
-						: undefined,
-				}
-			: undefined,
-		InternalHref: richText.InternalHref ? { ...richText.InternalHref } : undefined,
+		...(text ? { Text: text } : {}),
+		...(richText.Equation ? { Equation: { ...richText.Equation } } : {}),
+		...(mention ? { Mention: mention } : {}),
+		...(richText.InternalHref ? { InternalHref: { ...richText.InternalHref } } : {}),
 	};
 }
-
-// ============================================================================
-// RichText Splitting and Range Extraction
-// ============================================================================
 
 /**
  * Splits a RichText array at a specific character position
@@ -162,20 +193,20 @@ export function extractRichTextRange(
 	// Trim whitespace from first/last elements
 	if (result.length) {
 		const first = result[0];
-		first.PlainText = first.PlainText.trimStart();
-		first.Text &&= { ...first.Text, Content: first.Text.Content.trimStart() };
+		if (first) {
+			first.PlainText = first.PlainText.trimStart();
+			first.Text &&= { ...first.Text, Content: first.Text.Content.trimStart() };
+		}
 
 		const last = result[result.length - 1];
-		last.PlainText = last.PlainText.trimEnd();
-		last.Text &&= { ...last.Text, Content: last.Text.Content.trimEnd() };
+		if (last) {
+			last.PlainText = last.PlainText.trimEnd();
+			last.Text &&= { ...last.Text, Content: last.Text.Content.trimEnd() };
+		}
 	}
 
 	return result;
 }
-
-// ============================================================================
-// Block Utilities
-// ============================================================================
 
 /**
  * Gets all RichText array locations within a block
@@ -226,6 +257,13 @@ export function getAllRichTextLocations(block: Block): RichTextLocation[] {
 			"Heading3.RichTexts",
 			block.Heading3.RichTexts,
 			(rt) => (block.Heading3!.RichTexts = rt),
+		);
+	}
+	if (block.Heading4) {
+		addLocation(
+			"Heading4.RichTexts",
+			block.Heading4.RichTexts,
+			(rt) => (block.Heading4!.RichTexts = rt),
 		);
 	}
 	if (block.BulletedListItem) {
@@ -284,11 +322,11 @@ export function getAllRichTextLocations(block: Block): RichTextLocation[] {
 	// Tables
 	block.Table?.Rows?.forEach((row, rowIndex) => {
 		row.Cells.forEach((cell, cellIndex) => {
-			addLocation(
-				`Table.Rows[${rowIndex}].Cells[${cellIndex}]`,
-				cell.RichTexts,
-				(rt) => (block.Table!.Rows![rowIndex].Cells[cellIndex].RichTexts = rt),
-			);
+			addLocation(`Table.Rows[${rowIndex}].Cells[${cellIndex}]`, cell.RichTexts, (rt) => {
+				const targetRow = block.Table?.Rows?.[rowIndex];
+				const targetCell = targetRow?.Cells[cellIndex];
+				if (targetCell) targetCell.RichTexts = rt;
+			});
 		});
 	});
 
@@ -303,10 +341,12 @@ export function getAllRichTextLocations(block: Block): RichTextLocation[] {
  */
 export function getChildrenFromBlock(block: Block): Block[] | null {
 	return (
+		block.Tab?.Children ||
 		block.Paragraph?.Children ||
 		block.Heading1?.Children ||
 		block.Heading2?.Children ||
 		block.Heading3?.Children ||
+		block.Heading4?.Children ||
 		block.Quote?.Children ||
 		block.Callout?.Children ||
 		block.Toggle?.Children ||

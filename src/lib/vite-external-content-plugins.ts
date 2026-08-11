@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { toDeployablePublicUrl } from "./external-content/external-content-utils";
 
 function ensureBlankLineAfterImports(source: string): string {
 	const lines = source.split(/\r?\n/);
@@ -7,7 +8,7 @@ function ensureBlankLineAfterImports(source: string): string {
 	let sawImport = false;
 
 	while (idx < lines.length) {
-		const trimmed = lines[idx].trim();
+		const trimmed = lines[idx]?.trim() ?? "";
 		if (!trimmed) {
 			if (!sawImport) {
 				idx += 1;
@@ -25,7 +26,7 @@ function ensureBlankLineAfterImports(source: string): string {
 
 	if (!sawImport) return source;
 	if (idx >= lines.length) return source;
-	if (lines[idx].trim() === "") return source;
+	if (lines[idx]?.trim() === "") return source;
 
 	lines.splice(idx, 0, "");
 	return lines.join("\n");
@@ -73,7 +74,7 @@ export function externalContentVitePlugins() {
 					const abs = path.posix.normalize(
 						path.posix.join("/custom-components", relPath.join("/"), raw),
 					);
-					return abs;
+					return toDeployablePublicUrl(abs);
 				};
 
 				let mutated = code;

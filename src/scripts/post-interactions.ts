@@ -1,3 +1,19 @@
+type TabAwareWindow = Window & {
+	__ensureNotionTabTargetVisible?: (targetOrId: string | HTMLElement | null) => HTMLElement | null;
+};
+
+function ensureVisibleInTabs(targetOrId: string | HTMLElement | null): HTMLElement | null {
+	const tabAwareWindow = window as TabAwareWindow;
+	const revealed = tabAwareWindow.__ensureNotionTabTargetVisible?.(targetOrId);
+	if (revealed instanceof HTMLElement) return revealed;
+
+	if (targetOrId instanceof HTMLElement) return targetOrId;
+	if (typeof targetOrId !== "string") return null;
+
+	const rawId = targetOrId.startsWith("#") ? targetOrId.slice(1) : targetOrId;
+	return document.getElementById(rawId);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
 	// Handle Headings Copy Link
 	const headings = document.querySelectorAll(".hasId");
@@ -28,12 +44,14 @@ document.addEventListener("DOMContentLoaded", () => {
 			const svgAfter = button.querySelector(".copy-icon-done");
 
 			if (svgBefore && svgAfter) {
-				svgBefore.classList.toggle("hidden");
-				svgAfter.classList.toggle("hidden");
-				setTimeout(() => {
-					svgBefore.classList.toggle("hidden");
-					svgAfter.classList.toggle("hidden");
+				button.classList.add("copied");
+				const prev = button.dataset.copyTimeout;
+				if (prev) window.clearTimeout(Number(prev));
+				const t = window.setTimeout(() => {
+					button.classList.remove("copied");
+					delete button.dataset.copyTimeout;
 				}, 1000);
+				button.dataset.copyTimeout = String(t);
 			}
 		});
 	});
@@ -50,7 +68,7 @@ document.addEventListener("DOMContentLoaded", () => {
 			if (!blockId) return;
 
 			window.location.hash = `#${blockId}`;
-			document.getElementById(blockId)?.scrollIntoView({ behavior: "smooth" });
+			ensureVisibleInTabs(blockId)?.scrollIntoView({ behavior: "smooth" });
 
 			delete listItem.dataset.showBackButton;
 			delete listItem.dataset.backToBlock;
@@ -79,7 +97,7 @@ document.addEventListener("DOMContentLoaded", () => {
 				target.dataset.showBackButton = "true";
 				target.dataset.backToBlock = originBlock;
 				window.location.hash = `#${targetId}`;
-				target.scrollIntoView({ behavior: "smooth" });
+				ensureVisibleInTabs(target)?.scrollIntoView({ behavior: "smooth" });
 			}
 		});
 	});

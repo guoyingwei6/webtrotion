@@ -1,23 +1,13 @@
-import type { ShikiHighlighter, ShikiHighlighterHighlightOptions } from "@astrojs/markdown-remark";
-import { createShikiHighlighter } from "@astrojs/markdown-remark";
+import { codeToHtml, type BundledLanguage } from "shiki";
 
 const DEFAULT_THEME = "github-dark-dimmed";
 
-let highlighterPromise: Promise<ShikiHighlighter> | null = null;
+type CodeToHtmlOptions = Parameters<typeof codeToHtml>[1];
 
-async function getHighlighter() {
-	if (!highlighterPromise) {
-		highlighterPromise = createShikiHighlighter({
-			theme: DEFAULT_THEME,
-		});
-	}
-
-	return highlighterPromise;
-}
-
-export interface HighlightCodeOptions extends ShikiHighlighterHighlightOptions {
+export interface HighlightCodeOptions extends Omit<CodeToHtmlOptions, "lang" | "theme"> {
 	code: string;
 	lang: string;
+	defaultColor?: "light" | "dark";
 }
 
 export async function highlightCodeToHtml({
@@ -25,12 +15,18 @@ export async function highlightCodeToHtml({
 	lang,
 	...options
 }: HighlightCodeOptions): Promise<string> {
-	const highlighter = await getHighlighter();
-
 	try {
-		return await highlighter.codeToHtml(code, lang, options);
+		return await codeToHtml(code, {
+			...options,
+			lang: lang as BundledLanguage,
+			theme: DEFAULT_THEME,
+		} as CodeToHtmlOptions);
 	} catch (error) {
 		console.warn(`[shiki] Falling back to plaintext for "${lang}".`, error);
-		return highlighter.codeToHtml(code, "plaintext", options);
+		return codeToHtml(code, {
+			...options,
+			lang: "plaintext",
+			theme: DEFAULT_THEME,
+		} as CodeToHtmlOptions);
 	}
 }

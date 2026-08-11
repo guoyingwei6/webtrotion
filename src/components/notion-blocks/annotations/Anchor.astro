@@ -12,17 +12,18 @@ export interface Props {
 const { richText } = Astro.props;
 const { hreflink, blocklinked, conditionmatch, post, isBlockLinkedHeading } =
 	await getAnchorLinkAndBlock(richText);
+const shouldWrapWithAnchor = hreflink && !richText.Mention;
 ---
 
 {
-	hreflink ? (
+	shouldWrapWithAnchor ? (
 		conditionmatch &&
 		["block_other_page", "other_page"].includes(conditionmatch) &&
 		post &&
 		post.Title ? (
 			<>
 				{/* ✅ Case 1: Link to another page or another page’s block */}
-				{conditionmatch === "block_other_page" ? (
+				{conditionmatch === "block_other_page" && blocklinked ? (
 					<NBlocksPopover
 						block={blocklinked}
 						linkedTo={hreflink}
@@ -46,7 +47,7 @@ const { hreflink, blocklinked, conditionmatch, post, isBlockLinkedHeading } =
 		) : conditionmatch === "block_current_page" ? (
 			<>
 				{/* ✅ Case 2: Link to a block on the current page */}
-				{!isBlockLinkedHeading && post && post.Title ? (
+				{!isBlockLinkedHeading && post && post.Title && blocklinked ? (
 					<NBlocksPopover
 						block={blocklinked}
 						linkedTo={hreflink}

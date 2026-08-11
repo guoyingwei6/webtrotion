@@ -61,7 +61,7 @@ async function setupMarginNotes() {
 setupMarginNotes();
 
 // Handle window resize
-let resizeTimeout;
+let resizeTimeout: ReturnType<typeof setTimeout> | undefined;
 window.addEventListener("resize", () => {
 	clearTimeout(resizeTimeout);
 	resizeTimeout = setTimeout(async () => {
@@ -77,8 +77,10 @@ window.addEventListener("resize", () => {
 			// Reload lightbox to register images in newly created margin notes
 			window.lightboxInstance?.reload();
 
-			// Hide any open popovers for footnote markers and mark them as non-interactive
+			// Hide popovers for margin markers, except inside wide blocks (their note is
+			// displaced below the block, so the inline popover stays live).
 			document.querySelectorAll("[data-margin-note]").forEach((marker) => {
+				if (marker.closest(".webtrotion-wide-breakout")) return;
 				const popoverId = marker.getAttribute("data-popover-target");
 				if (popoverId) {
 					const popover = document.getElementById(popoverId);
@@ -110,8 +112,40 @@ window.addEventListener("resize", () => {
 	}, 250);
 });
 
+// Reposition margin notes whenever the post body's layout shifts after the
+// initial render. Margin notes are absolutely positioned off each marker's
+// offset, so any content that grows/shrinks *above* them (a <details> toggle
+// opening or closing, a lazy-loaded iframe/embed expanding once it mounts,
+// async media, etc.) would otherwise leave them stuck at stale offsets.
+let layoutShiftTimeout: ReturnType<typeof setTimeout> | undefined;
+function scheduleMarginNoteReposition() {
+	clearTimeout(layoutShiftTimeout);
+	layoutShiftTimeout = setTimeout(() => {
+		// Margin notes only exist on large screens; below that the popover system
+		// handles footnotes and there is nothing to reposition.
+		if (!window.matchMedia("(min-width: 1024px)").matches) return;
+		initializeMarginNotes();
+		window.lightboxInstance?.reload();
+	}, 150);
+}
+
+// <details> `toggle` events don't bubble, so listen in the capture phase to
+// catch every toggle open/close anywhere on the page.
+document.addEventListener("toggle", scheduleMarginNoteReposition, true);
+
+// Watch each post body for any other reflow (embeds, iframes, images, async
+// content). Margin notes are out-of-flow (position: absolute), so creating them
+// never changes the post body's box size — this observer won't feed back on
+// itself.
+if (typeof ResizeObserver !== "undefined") {
+	const marginNoteResizeObserver = new ResizeObserver(scheduleMarginNoteReposition);
+	document
+		.querySelectorAll(".post-body:not(.post-preview-full-container)")
+		.forEach((postBody) => marginNoteResizeObserver.observe(postBody));
+}
+
 function positionMarginNotes(limit?: number) {
-	const markers = document.querySelectorAll("[data-margin-note]");
+	const markers = document.querySelectorAll<HTMLElement>("[data-margin-note]");
 	let positioned = 0;
 	const processedCitationKeys = new Set<string>();
 
@@ -121,7 +155,9 @@ function positionMarginNotes(limit?: number) {
 		const footnoteId = markerEl.getAttribute("data-margin-note");
 		if (!footnoteId) return;
 
-		const template = document.getElementById(`template-margin-${footnoteId}`);
+		const template = document.getElementById(
+			`template-margin-${footnoteId}`,
+		) as HTMLTemplateElement | null;
 		if (!template) return;
 
 		//Deduplicate citations based on citation key to avoid multiple margin notes for same citation in same block in a page.
@@ -136,7 +172,7 @@ function positionMarginNotes(limit?: number) {
 			processedCitationKeys.add(citationKey);
 		}
 
-		const postBody = markerEl.closest(".post-body");
+		const postBody = markerEl.closest<HTMLElement>(".post-body");
 		if (!postBody) return;
 
 		// Skip if inside a post-preview-full-container (collection full preview pages)
@@ -156,14 +192,18 @@ function positionMarginNotes(limit?: number) {
 
 		// Check if there are nested citation markers in the cloned content
 		// Query marginNote (not content) since content is now empty after appendChild
-		const nestedCitationMarkers = marginNote.querySelectorAll('[data-margin-note^="citation-"]');
+		const nestedCitationMarkers = marginNote.querySelectorAll<HTMLElement>(
+			'[data-margin-note^="citation-"]',
+		);
 
 		nestedCitationMarkers.forEach((citationMarker) => {
 			const citationId = citationMarker.getAttribute("data-margin-note");
 			if (!citationId) return;
 
 			// Find the citation's margin template (search in marginNote)
-			const citationTemplate = marginNote.querySelector(`#template-margin-${citationId}`);
+			const citationTemplate = marginNote.querySelector<HTMLTemplateElement>(
+				`#template-margin-${citationId}`,
+			);
 			if (!citationTemplate) return;
 
 			const nestedCitationKey = citationMarker.getAttribute("data-citation-key");
@@ -218,7 +258,7 @@ function positionMarginNotes(limit?: number) {
 	stackAllMarginNotesGlobally();
 }
 
-function setupHoverHighlight(marker, note) {
+function setupHoverHighlight(marker: HTMLElement, note: HTMLElement) {
 	marker.addEventListener("mouseenter", () => {
 		marker.classList.add("highlighted");
 		note.classList.add("highlighted");
@@ -247,9 +287,16 @@ function setupHoverHighlight(marker, note) {
  */
 function stackAllMarginNotesGlobally() {
 	// Find all margin notes in the document
-	const allNotes = Array.from(document.querySelectorAll(".footnote-margin-note"));
+	const allNotes = Array.from(document.querySelectorAll<HTMLElement>(".footnote-margin-note"));
 
 	if (allNotes.length === 0) return;
+
+	// Bands occupied by wide blocks reaching into the gutter; notes landing inside
+	// are pushed below so a widened block never overlaps a margin note.
+	const firstNote = allNotes[0];
+	if (!firstNote) return;
+	const postBody = firstNote.closest(".post-body");
+	const wideBands = postBody ? getWideBands(postBody as HTMLElement) : [];
 
 	// Sort by initial top position
 	allNotes.sort((a, b) => {
@@ -258,18 +305,72 @@ function stackAllMarginNotesGlobally() {
 		return aTop - bTop;
 	});
 
+	// First pass: move any note whose natural position collides with a wide block
+	// down to just below that block.
+	if (wideBands.length) {
+		allNotes.forEach((note) => {
+			const top = parseInt(note.style.top) || 0;
+			const adjusted = pushBelowWideBands(top, wideBands);
+			if (adjusted !== top) note.style.top = `${adjusted}px`;
+		});
+		allNotes.sort((a, b) => (parseInt(a.style.top) || 0) - (parseInt(b.style.top) || 0));
+	}
+
 	// Stack with minimum gap of 8px
 	for (let i = 1; i < allNotes.length; i++) {
 		const prevNote = allNotes[i - 1];
 		const currNote = allNotes[i];
+		if (!prevNote || !currNote) continue;
 
 		const prevTop = parseInt(prevNote.style.top) || 0;
 		const prevBottom = prevTop + prevNote.offsetHeight;
-		const currTop = parseInt(currNote.style.top) || 0;
+		let currTop = parseInt(currNote.style.top) || 0;
 
 		// If current note would overlap with previous note, push it down
 		if (currTop < prevBottom + 8) {
-			currNote.style.top = `${prevBottom + 8}px`;
+			currTop = prevBottom + 8;
+		}
+		// Keep it clear of any wide-block band it may have been pushed into.
+		if (wideBands.length) currTop = pushBelowWideBands(currTop, wideBands);
+		currNote.style.top = `${currTop}px`;
+	}
+}
+
+// Vertical bands (in note-top coordinate space) of wide blocks whose right edge
+// reaches into the margin-note gutter.
+function getWideBands(postBody: HTMLElement): Array<{ top: number; bottom: number }> {
+	const wideEls = postBody.querySelectorAll<HTMLElement>(".webtrotion-wide-breakout");
+	if (!wideEls.length) return [];
+
+	const pbRect = postBody.getBoundingClientRect();
+	// Only wide blocks whose right edge reaches past the note column matter.
+	const gutterStart = pbRect.right + 4;
+	const bands: Array<{ top: number; bottom: number }> = [];
+
+	wideEls.forEach((el) => {
+		const r = el.getBoundingClientRect();
+		if (r.right <= gutterStart) return; // doesn't reach the note column
+		bands.push({
+			top: r.top - pbRect.top + postBody.scrollTop,
+			bottom: r.bottom - pbRect.top + postBody.scrollTop,
+		});
+	});
+
+	return bands.sort((a, b) => a.top - b.top);
+}
+
+// Pushes `top` below any wide band it falls into; iterative so it clears successive bands.
+function pushBelowWideBands(top: number, bands: Array<{ top: number; bottom: number }>): number {
+	let result = top;
+	let moved = true;
+	while (moved) {
+		moved = false;
+		for (const band of bands) {
+			if (result >= band.top - 4 && result < band.bottom + 8) {
+				result = band.bottom + 8;
+				moved = true;
+			}
 		}
 	}
+	return result;
 }
